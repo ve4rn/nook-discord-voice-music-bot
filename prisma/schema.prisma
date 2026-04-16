@@ -1,0 +1,85 @@
+// ---------- Prisma ----------
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model PrivateVoiceChannel {
+  id         String   @id @default(cuid())
+
+  guildId    String
+  channelId  String   @unique
+  ownerId    String
+  isPrivate  Boolean  @default(true)
+  allowedIds String[] @default([])
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([guildId])
+  @@index([guildId, ownerId])
+}
+
+model PrivateVoiceGuildConfig {
+  id                    String   @id @default(cuid())
+  guildId               String   @unique
+  createChannelId       String   @default("000000000")
+  categoryId            String   @default("000000000")
+  enabled               Boolean  @default(true)
+  lang                  String   @default("fr")
+  maxAllowedUsers       Int      @default(10)
+  panelMentionTtlMs     Int      @default(3000)
+  emptyChannelSweepMs   Int      @default(60000)
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+model GuildAudioState {
+  id                String   @id @default(cuid())
+  guildId           String   @unique
+  voiceChannelId    String?
+  textChannelId     String?
+  isPlaying         Boolean  @default(false)
+  isPaused          Boolean  @default(false)
+  positionMs        Int      @default(0)
+  positionUpdatedAt DateTime?
+  currentTrackId    String?  @unique
+  currentTrack      Track?   @relation("CurrentAudioTrack", fields: [currentTrackId], references: [id], onDelete: SetNull)
+  queue             Track[]  @relation("QueuedAudioTracks")
+  volume            Int?
+  loop              Boolean?
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model Track {
+  id            String            @id @default(cuid())
+  guildId       String
+  title         String
+  url           String
+  duration      Int
+  requestedBy   String
+  source        String?
+  author        String?
+  encoded       String?
+  identifier    String?
+  artworkUrl    String?
+  isStream      Boolean           @default(false)
+  queuePosition Int?
+  queuedInId    String?
+  queuedIn      GuildAudioState?  @relation("QueuedAudioTracks", fields: [queuedInId], references: [id], onDelete: Cascade)
+  currentFor    GuildAudioState?  @relation("CurrentAudioTrack")
+
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([guildId])
+  @@index([queuedInId, queuePosition])
+  @@index([encoded])
+}

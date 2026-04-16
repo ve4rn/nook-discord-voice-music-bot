@@ -1,0 +1,44 @@
+{
+  "name": "nook-discord-voice-music-bot",
+  "version": "1.0.0",
+  "description": "Nook is a modern Discord voice and music bot featuring instant playlists, vibe-based playback, and seamless Lavalink integration.",
+  "main": "index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "node index.js",
+    "setup:lavalink": "powershell -ExecutionPolicy Bypass -File scripts/setup-lavalink.ps1",
+    "start:lavalink": "powershell -ExecutionPolicy Bypass -File scripts/start-lavalink.ps1",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "discord",
+    "discord-bot",
+    "music-bot",
+    "voice-bot",
+    "discord-music",
+    "discord-voice",
+    "lavalink",
+    "lavalink-bot",
+    "discordjs",
+    "nodejs",
+    "playlist",
+    "audio",
+    "streaming",
+    "bot"
+  ],
+  "author": "ve4rn",
+  "license": "ISC",
+  "dependencies": {
+    "@prisma/client": "^6.4.1",
+    "discord.js": "^14.22.1",
+    "dotenv": "^16.4.7",
+    "lavalink-client": "^2.10.0",
+    "prisma": "^6.4.1",
+    "typescript": "^5.8.2"
+  }
+}
