@@ -1,5 +1,6 @@
 import { ButtonInteraction, MessageFlags } from "discord.js";
 import type App from "../../config/App.js";
+import { requireComponentReplyPermissions, requireTextReplyPermissions } from "../../config/CommandPermissionGuards.js";
 import { buildAudioPanel } from "./audioPanel.js";
 import { defaultAudioCommandCopy, getAudioCommandCopy } from "./audioCommandCache.js";
 import { requireControlVoice } from "./voiceGuards.js";
@@ -20,6 +21,7 @@ export async function handleAudioButton(interaction: ButtonInteraction) {
         });
         return true;
     }
+    if (!await requireTextReplyPermissions(interaction)) return true;
 
     if (!app.audio) {
         await interaction.reply({
@@ -75,6 +77,8 @@ export async function handleAudioButton(interaction: ButtonInteraction) {
     }
 
     const state = await app.audio.getQueue(guildId);
+    if (!await requireComponentReplyPermissions(interaction)) return true;
+
     await interaction.update({
         components: [await buildAudioPanel(state, guildId)],
         flags: MessageFlags.IsComponentsV2,

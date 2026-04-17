@@ -1,5 +1,6 @@
 import { MessageFlags, PermissionFlagsBits } from "discord.js";
 import { CommandBuilder } from "../../../config/CommandBuilder.js";
+import { requireComponentReplyPermissions, requireTextReplyPermissions } from "../../../config/CommandPermissionGuards.js";
 import { buildAudioPanel } from "../../../services/audio/audioPanel.js";
 import { defaultAudioCommandCopy, getAudioCommandCopy } from "../../../services/audio/audioCommandCache.js";
 import { requireControlVoice } from "../../../services/audio/voiceGuards.js";
@@ -23,6 +24,8 @@ export default CommandBuilder({
     if (!interaction.guildId) {
         return interaction.reply({ content: defaultAudioCommandCopy.serverOnly, flags: MessageFlags.Ephemeral });
     }
+    if (!await requireTextReplyPermissions(interaction)) return;
+
     const copy = await getAudioCommandCopy(interaction.guildId);
 
     if (!await requireControlVoice(interaction, app)) return;
@@ -40,6 +43,7 @@ export default CommandBuilder({
     }
 
     const state = await app.audio!.getQueue(interaction.guildId);
+    if (!await requireComponentReplyPermissions(interaction)) return;
     return interaction.reply({
         components: [await buildAudioPanel(state, interaction.guildId)],
         flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,

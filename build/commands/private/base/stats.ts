@@ -1,5 +1,6 @@
 import { MessageFlags, PermissionFlagsBits, SeparatorSpacingSize } from "discord.js";
 import { CommandBuilder } from "../../../config/CommandBuilder.js";
+import { requireComponentReplyPermissions, requireTextReplyPermissions } from "../../../config/CommandPermissionGuards.js";
 import { NookBuilder } from "../../../config/NookBuilder.js";
 
 function formatBytes(bytes: number) {
@@ -38,6 +39,9 @@ export default CommandBuilder({
     permissions: [PermissionFlagsBits.SendMessages],
     cooldown: 5,
 }, async (interaction, app) => {
+    if (!await requireTextReplyPermissions(interaction)) return;
+    if (!await requireComponentReplyPermissions(interaction)) return;
+
     const memory = process.memoryUsage();
     const publicCommands = Array.from(app.commands.values()).filter(command => command.visibility !== "private").length;
     const privateCommands = Array.from(app.commands.values()).filter(command => command.visibility === "private").length;

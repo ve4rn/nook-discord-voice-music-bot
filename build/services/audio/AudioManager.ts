@@ -2,6 +2,7 @@ import { LavalinkManager, type Player, type Track } from "lavalink-client";
 import { ChannelType, MessageFlags, type TextChannel, type VoiceBasedChannel, type VoiceState } from "discord.js";
 import type App from "../../config/App.js";
 import { NookBuilder } from "../../config/NookBuilder.js";
+import { checkCanSendComponents } from "../../config/PermissionChecks.js";
 import { AudioStateRepository } from "./AudioStateRepository.js";
 import { TrackSearchService } from "./TrackSearchService.js";
 import { getAudioCommandCopy } from "./audioCommandCache.js";
@@ -575,6 +576,11 @@ export class AudioManager {
         if (!channel || !("send" in channel)) return;
 
         const copy = await getAudioCommandCopy(guildId);
+        if (!checkCanSendComponents(channel as TextChannel).ok) {
+            await (channel as TextChannel).send(`${copy.session.voiceDisconnectedTitle}\n${copy.session.voiceDisconnectedDescription}`).catch(() => null);
+            return;
+        }
+
         const panel = new NookBuilder()
             .addTextDisplayComponents(text =>
                 text.setContent(`## ${copy.session.voiceDisconnectedTitle}\n${copy.session.voiceDisconnectedDescription}`),
