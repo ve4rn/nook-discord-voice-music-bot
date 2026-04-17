@@ -1,6 +1,5 @@
 import {
     AuditLogEvent,
-    ChannelType,
     Guild,
     GuildMember,
     MessageFlags,
@@ -8,12 +7,18 @@ import {
     SeparatorSpacingSize,
     StringSelectMenuBuilder,
     StringSelectMenuInteraction,
-    TextChannel,
 } from "discord.js";
 import { EventBuilder } from "../../config/EventBuilder.js";
 import { NookBuilder } from "../../config/NookBuilder.js";
 import ConsoleMessage from "../../config/ConsoleMessage.js";
+import { requireComponentReplyPermissions, requireTextReplyPermissions } from "../../config/CommandPermissionGuards.js";
 import { privateVoiceManager } from "../../config/PrivateVoiceManager.js";
+import {
+    checkCanSendComponents,
+    findFirstPublicWritableTextChannel,
+    formatPermissionList,
+    type PermissionLanguage,
+} from "../../config/PermissionChecks.js";
 
 const DELETE_AFTER_MS = 5 * 60 * 1000;
 const CUSTOM_ID_PREFIX = "nook_setup_language";
@@ -28,6 +33,7 @@ type WelcomeCopy = {
     label: string;
     title: string;
     message: (language: string, deleteAtUnix: number, addedByMention: string | null) => string;
+    missingComponentPermissions: (permissions: string) => string;
     adminOnly: string;
     selectPlaceholder: string;
     selected: (language: string) => string;
@@ -47,6 +53,7 @@ const welcomeCopy: Record<WelcomeLanguage, WelcomeCopy> = {
             "Pour terminer la configuration, utilisez la commande **/setup**.",
         ].join("\n"),
         adminOnly: "Seuls les administrateurs peuvent modifier cette langue.",
+        missingComponentPermissions: (permissions) => `Je peux envoyer ce message, mais il me manque des permissions pour afficher le panneau interactif:\n${permissions}`,
         selectPlaceholder: "Choisir une langue",
         selected: (language) => `Langue selectionnée: **${language}**. Lancez /setup pour continuer la configuration.`,
     },
@@ -62,6 +69,7 @@ const welcomeCopy: Record<WelcomeLanguage, WelcomeCopy> = {
             `This message will be deleted automatically <t:${deleteAtUnix}:R>.`,
             "To finish configuration, use the **/setup** command.",
         ].join("\n"),
+        missingComponentPermissions: (permissions) => `I can send this message, but I am missing permissions to display the interactive panel:\n${permissions}`,
         adminOnly: "Only administrators can change this language.",
         selectPlaceholder: "Choose a language",
         selected: (language) => `Selected language: **${language}**. Run /setup to continue configuration.`,
@@ -78,6 +86,7 @@ const welcomeCopy: Record<WelcomeLanguage, WelcomeCopy> = {
             `Este mensaje se eliminara automaticamente <t:${deleteAtUnix}:R>.`,
             "Para terminar la configuracion, usa el comando **/setup**.",
         ].join("\n"),
+        missingComponentPermissions: (permissions) => `Puedo enviar este mensaje, pero me faltan permisos para mostrar el panel interactivo:\n${permissions}`,
         adminOnly: "Solo los administradores pueden cambiar este idioma.",
         selectPlaceholder: "Elegir un idioma",
         selected: (language) => `Idioma seleccionado: **${language}**. Usa /setup para continuar la configuracion.`,
@@ -94,6 +103,7 @@ const welcomeCopy: Record<WelcomeLanguage, WelcomeCopy> = {
             `Diese Nachricht wird automatisch <t:${deleteAtUnix}:R> geloescht.`,
             "Um die Einrichtung abzuschliessen, nutze den Befehl **/setup**.",
         ].join("\n"),
+        missingComponentPermissions: (permissions) => `Ich kann diese Nachricht senden, aber mir fehlen Berechtigungen fuer das interaktive Panel:\n${permissions}`,
         adminOnly: "Nur Administratoren koennen diese Sprache aendern.",
         selectPlaceholder: "Sprache auswaehlen",
         selected: (language) => `Ausgewaehlte Sprache: **${language}**. Fuehre /setup aus, um die Einrichtung fortzusetzen.`,
@@ -169,12 +179,6 @@ async function fetchBotAdderMention(guild: Guild) {
     return null;
 }
 
-function compareWelcomeChannels(left: TextChannel, right: TextChannel) {
-    return left.position - right.position
-        || left.rawPosition - right.rawPosition
-        || left.id.localeCompare(right.id);
-}
-
 function buildWelcomePanel(guild: Guild, language: WelcomeLanguage, deleteAtUnix: number, addedByMention: string | null) {
     const copy = welcomeCopy[language];
 
@@ -210,35 +214,6 @@ function buildWelcomePanel(guild: Guild, language: WelcomeLanguage, deleteAtUnix
         );
 }
 
-function canEveryoneReadAndWrite(channel: TextChannel) {
-    const everyonePerms = channel.permissionsFor(channel.guild.roles.everyone);
-    const botPerms = channel.guild.members.me ? channel.permissionsFor(channel.guild.members.me) : null;
-    return Boolean(
-        everyonePerms?.has([
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory,
-        ])
-        && botPerms?.has([
-            PermissionFlagsBits.ViewChannel,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ReadMessageHistory,
-        ]),
-    );
-}
-
-async function findWelcomeChannel(guild: Guild) {
-    await guild.channels.fetch().catch(() => null);
-    const candidates = guild.channels.cache.filter((channel): channel is TextChannel =>
-        channel.type === ChannelType.GuildText && canEveryoneReadAndWrite(channel),
-    );
-
-    return candidates.reduce<TextChannel | null>((bestChannel, channel) => {
-        if (!bestChannel) return channel;
-        return compareWelcomeChannels(channel, bestChannel) < 0 ? channel : bestChannel;
-    }, null);
-}
-
 export async function handleGuildWelcomeLanguageSelect(interaction: StringSelectMenuInteraction) {
     const [prefix, guildId, rawDeleteAtUnix] = interaction.customId.split(":");
     if (prefix !== CUSTOM_ID_PREFIX) return false;
@@ -264,6 +239,8 @@ export async function handleGuildWelcomeLanguageSelect(interaction: StringSelect
         await interaction.reply({ content: copy.adminOnly, flags: MessageFlags.Ephemeral });
         return true;
     }
+    if (!await requireTextReplyPermissions(interaction)) return true;
+    if (!await requireComponentReplyPermissions(interaction)) return true;
 
     await saveGuildLanguage(interaction.guild.id, selectedLanguage);
 
@@ -283,7 +260,7 @@ export default EventBuilder({
     description: "Send the welcome message when the bot joins a server",
 }, async (guild) => {
     const language = detectLanguage(guild.preferredLocale);
-    const channel = await findWelcomeChannel(guild);
+    const channel = await findFirstPublicWritableTextChannel(guild);
     const deleteAtUnix = Math.floor((Date.now() + DELETE_AFTER_MS) / 1000);
 
     if (!channel) {
@@ -292,10 +269,20 @@ export default EventBuilder({
     }
 
     const addedByMention = await fetchBotAdderMention(guild);
-    const message = await channel.send({
-        components: [buildWelcomePanel(guild, language, deleteAtUnix, addedByMention)],
-        flags: MessageFlags.IsComponentsV2,
-    });
+    const componentCheck = checkCanSendComponents(channel);
+    const copy = welcomeCopy[language];
+    const message = componentCheck.ok
+        ? await channel.send({
+            components: [buildWelcomePanel(guild, language, deleteAtUnix, addedByMention)],
+            flags: MessageFlags.IsComponentsV2,
+        })
+        : await channel.send({
+            content: [
+                `## ${copy.title}`,
+                copy.message(getLanguageLabel(language), deleteAtUnix, addedByMention),
+                copy.missingComponentPermissions(formatPermissionList(language as PermissionLanguage, componentCheck.missing)),
+            ].join("\n"),
+        });
 
     const timer = setTimeout(() => {
         void message.delete().catch(() => undefined);

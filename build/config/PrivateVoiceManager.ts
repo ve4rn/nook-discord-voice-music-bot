@@ -24,6 +24,17 @@ import {
 } from "discord.js";
 import type App from "./App.js";
 import { NookBuilder } from "./NookBuilder.js";
+import {
+  checkCanCreateVoiceInCategory,
+  checkCanManageVoiceChannel,
+  checkCanMoveMemberToVoice,
+  checkCanSendComponents,
+  checkCanSendText,
+  checkVoiceChannelAccess,
+  findFirstPublicWritableTextChannel,
+  formatPermissionList,
+  type PermissionLanguage,
+} from "./PermissionChecks.js";
 import { prisma } from "./Prisma.js";
 
 type SupportedLanguage = "fr" | "en" | "es" | "de";
@@ -32,6 +43,7 @@ type PvcInteraction = ButtonInteraction<CacheType> | ModalSubmitInteraction<Cach
 type ParsedCustomId = { action: PanelAction; channelId: string; ownerId: string };
 type PanelCreatePayload = { components: NookBuilder[]; flags: typeof MessageFlags.IsComponentsV2 };
 type PanelUpdatePayload = { content: null; components: NookBuilder[]; flags: typeof MessageFlags.IsComponentsV2 };
+type PermissionContext = "createVoice" | "moveMember" | "managePermissions" | "sendPanel" | "joinVoice";
 
 type PrivateVoiceChannel = {
   id: string;
@@ -83,6 +95,8 @@ type TranslationSet = {
   panelDescription: (channelName: string, isPrivate: boolean, allowedCount: number) => string;
   panelFooter: string;
   panelTitle: string;
+  permissionAlert: (ownerMention: string, context: string, permissions: string) => string;
+  permissionContexts: Record<PermissionContext, string>;
   privateButton: string;
   privateStatus: string;
   publicButton: string;
@@ -120,9 +134,18 @@ const translations: Record<SupportedLanguage, TranslationSet> = {
     noLongerExists: "Ce salon vocal privé n'existe plus.",
     notOwner: "Vous n'êtes pas le propriétaire de ce salon vocal privé.",
     panelDescription: (channelName, isPrivate, allowedCount) =>
-      `**${channelName}**\n${isPrivate ? "Mode prive activé." : "Mode public activé."}\n${allowedCount} membre(s) actuellement autorise(s) en plus du proprietaire.`,
+      `**${channelName}**\n${isPrivate ? "Mode privé activé." : "Mode public activé."}\n${allowedCount} membre(s) actuellement autorise(s) en plus du proprietaire.`,
     panelFooter: "Les changements sont appliqués en direct sur le salon vocal.",
     panelTitle: "Gestion du salon vocal",
+    permissionAlert: (ownerMention, context, permissions) =>
+      `${ownerMention}, je ne peux pas continuer la gestion des vocaux prives: ${context}.\nPermissions manquantes:\n${permissions}`,
+    permissionContexts: {
+      createVoice: "creation du salon vocal prive",
+      moveMember: "deplacement du membre vers son salon vocal prive",
+      managePermissions: "mise a jour des permissions du salon vocal prive",
+      sendPanel: "envoi du panneau de gestion dans le salon vocal prive",
+      joinVoice: "acces vocal du bot au salon prive",
+    },
     privateButton: "Rendre privé",
     privateStatus: "Seuls les membres autorisés peuvent rejoindre le salon.",
     publicButton: "Rendre public",
@@ -150,6 +173,15 @@ const translations: Record<SupportedLanguage, TranslationSet> = {
       `**${channelName}**\n${isPrivate ? "Private mode is enabled." : "Public mode is enabled."}\n${allowedCount} currently allowed member(s) besides the owner.`,
     panelFooter: "Changes are applied live to the voice channel.",
     panelTitle: "Voice Channel Controls",
+    permissionAlert: (ownerMention, context, permissions) =>
+      `${ownerMention}, I cannot continue managing private voice channels: ${context}.\nMissing permissions:\n${permissions}`,
+    permissionContexts: {
+      createVoice: "creating the private voice channel",
+      moveMember: "moving the member into their private voice channel",
+      managePermissions: "updating private voice channel permissions",
+      sendPanel: "sending the control panel in the private voice channel",
+      joinVoice: "bot voice access to the private channel",
+    },
     privateButton: "Make private",
     privateStatus: "Only allowed members can join this channel.",
     publicButton: "Make public",
@@ -177,6 +209,15 @@ const translations: Record<SupportedLanguage, TranslationSet> = {
       `**${channelName}**\n${isPrivate ? "Modo privado activado." : "Modo publico activado."}\n${allowedCount} miembro(s) autorizado(s) ademas del propietario.`,
     panelFooter: "Los cambios se aplican en directo al canal de voz.",
     panelTitle: "Gestion del canal de voz",
+    permissionAlert: (ownerMention, context, permissions) =>
+      `${ownerMention}, no puedo continuar gestionando los canales de voz privados: ${context}.\nPermisos que faltan:\n${permissions}`,
+    permissionContexts: {
+      createVoice: "creacion del canal de voz privado",
+      moveMember: "mover al miembro a su canal de voz privado",
+      managePermissions: "actualizacion de permisos del canal de voz privado",
+      sendPanel: "envio del panel de gestion en el canal de voz privado",
+      joinVoice: "acceso de voz del bot al canal privado",
+    },
     privateButton: "Hacer privado",
     privateStatus: "Solo los miembros autorizados pueden unirse al canal.",
     publicButton: "Hacer publico",
@@ -204,6 +245,15 @@ const translations: Record<SupportedLanguage, TranslationSet> = {
       `**${channelName}**\n${isPrivate ? "Privater Modus ist aktiv." : "Oeffentlicher Modus ist aktiv."}\n${allowedCount} zusaetzliche erlaubte(s) Mitglied(er).`,
     panelFooter: "Aenderungen werden direkt auf den Sprachkanal angewendet.",
     panelTitle: "Sprachkanal-Verwaltung",
+    permissionAlert: (ownerMention, context, permissions) =>
+      `${ownerMention}, ich kann die privaten Sprachkanaele nicht weiter verwalten: ${context}.\nFehlende Berechtigungen:\n${permissions}`,
+    permissionContexts: {
+      createVoice: "Erstellen des privaten Sprachkanals",
+      moveMember: "Verschieben des Mitglieds in den privaten Sprachkanal",
+      managePermissions: "Aktualisieren der Berechtigungen des privaten Sprachkanals",
+      sendPanel: "Senden des Verwaltungspanels im privaten Sprachkanal",
+      joinVoice: "Sprachzugriff des Bots auf den privaten Kanal",
+    },
     privateButton: "Privat machen",
     privateStatus: "Nur erlaubte Mitglieder koennen diesem Kanal beitreten.",
     publicButton: "Oeffentlich machen",
@@ -322,7 +372,10 @@ export class PrivateVoiceManager {
 
     await this.withMemberLock(newState.guild.id, member.id, async () => {
       if (newState.channelId === config.createChannelId) {
-        const movedBackToOwnedChannel = await this.handleCreateChannelJoin(newState, oldState, config);
+        const movedBackToOwnedChannel = await this.handleCreateChannelJoin(newState, oldState, config).catch(error => {
+          logError(`failed to handle private voice creator join for member ${member.id}`, error);
+          return false;
+        });
         if (movedBackToOwnedChannel) return;
       }
 
@@ -595,6 +648,33 @@ export class PrivateVoiceManager {
     return typeof entry === "function" ? entry(...args) : entry;
   }
 
+  private permissionLanguage(config: PrivateVoiceGuildConfig | null): PermissionLanguage {
+    return parseLanguage(config?.lang);
+  }
+
+  private permissionContext(config: PrivateVoiceGuildConfig | null, context: PermissionContext) {
+    return translations[parseLanguage(config?.lang)].permissionContexts[context];
+  }
+
+  private async notifyMissingPermissions(
+    guild: Guild,
+    config: PrivateVoiceGuildConfig | null,
+    context: PermissionContext,
+    missing: Parameters<typeof formatPermissionList>[1],
+  ) {
+    const channel = await findFirstPublicWritableTextChannel(guild);
+    if (!channel) return;
+
+    const sendCheck = checkCanSendText(channel);
+    if (!sendCheck.ok) return;
+
+    const language = this.permissionLanguage(config);
+    const permissions = formatPermissionList(language, missing);
+    const ownerMention = `<@${guild.ownerId}>`;
+    const content = this.t(config, "permissionAlert", ownerMention, this.permissionContext(config, context), permissions);
+    await channel.send({ content }).catch(error => logError(`failed to send missing permissions alert in guild ${guild.id}`, error));
+  }
+
   private async withMemberLock<T>(guildId: string, memberId: string, task: () => Promise<T>): Promise<T> {
     const key = `${guildId}:${memberId}`;
     const previous = this.memberLocks.get(key) ?? Promise.resolve();
@@ -692,6 +772,12 @@ export class PrivateVoiceManager {
     const botUserId = guild.client.user?.id;
     if (!botUserId) throw new Error("Bot user is not available.");
 
+    const manageCheck = checkCanManageVoiceChannel(channel);
+    if (!manageCheck.ok) {
+      await this.notifyMissingPermissions(guild, config, "managePermissions", manageCheck.missing);
+      throw new Error(`Missing permissions to manage private voice channel ${channel.id}: ${manageCheck.missing.join(", ")}`);
+    }
+
     const overwrites: OverwriteResolvable[] = [
       {
         id: guild.roles.everyone.id,
@@ -769,11 +855,24 @@ export class PrivateVoiceManager {
 
   private async sendManagedChannelMessage(channel: VoiceChannel, payload: string | Parameters<VoiceChannel["send"]>[0]) {
     if (!channel.isSendable()) return;
+    const sendsComponents = typeof payload !== "string"
+      && Array.isArray((payload as { components?: unknown[] }).components)
+      && ((payload as { components?: unknown[] }).components?.length ?? 0) > 0;
+    const check = sendsComponents ? checkCanSendComponents(channel) : checkCanSendText(channel);
+    if (!check.ok) {
+      logError(`missing permissions to send in private voice channel ${channel.id}: ${check.missing.join(", ")}`, check.missing);
+      return;
+    }
     await channel.send(payload).catch(error => logError(`failed to send a message in voice channel ${channel.id}`, error));
   }
 
   private async sendOwnerGreeting(channel: VoiceChannel, owner: GuildMember, config: PrivateVoiceGuildConfig) {
     if (!channel.isSendable()) return;
+    const check = checkCanSendText(channel);
+    if (!check.ok) {
+      await this.notifyMissingPermissions(channel.guild, config, "sendPanel", check.missing);
+      return;
+    }
     const pingMessage = await channel.send({ content: owner.toString() }).catch(error => {
       logError(`failed to send greeting in voice channel ${channel.id}`, error);
       return null;
@@ -786,6 +885,12 @@ export class PrivateVoiceManager {
     const category = guild.channels.cache.get(config.categoryId) ?? await guild.channels.fetch(config.categoryId);
     if (!category || category.type !== ChannelType.GuildCategory) {
       throw new Error(`Configured category ${config.categoryId} was not found or is not a category.`);
+    }
+
+    const createCheck = checkCanCreateVoiceInCategory(guild, category);
+    if (!createCheck.ok) {
+      await this.notifyMissingPermissions(guild, config, "createVoice", createCheck.missing);
+      throw new Error(`Missing permissions to create private voice channel in category ${category.id}: ${createCheck.missing.join(", ")}`);
     }
 
     const channelName = sanitizeChannelName(translations[parseLanguage(config.lang)].defaultChannelName(owner.displayName));
@@ -814,6 +919,11 @@ export class PrivateVoiceManager {
 
       this.cachePrivateChannel(pvc);
       await this.syncChannelPermissions(guild, channel, pvc, config);
+      const voiceAccessCheck = checkVoiceChannelAccess(channel);
+      if (!voiceAccessCheck.ok) {
+        await this.notifyMissingPermissions(guild, config, "joinVoice", voiceAccessCheck.missing);
+        throw new Error(`Missing bot voice access in private voice channel ${channel.id}: ${voiceAccessCheck.missing.join(", ")}`);
+      }
       return { channel, pvc };
     } catch (error) {
       await this.safelyDeleteChannel(channel, "Rolling back failed private voice channel creation").catch(() => undefined);
@@ -847,6 +957,12 @@ export class PrivateVoiceManager {
   }
 
   private async publishControlPanel(channel: VoiceChannel, owner: GuildMember, pvc: PrivateVoiceChannel, config: PrivateVoiceGuildConfig) {
+    const check = checkCanSendComponents(channel);
+    if (!check.ok) {
+      await this.notifyMissingPermissions(channel.guild, config, "sendPanel", check.missing);
+      await this.sendManagedChannelMessage(channel, this.t(config, "permissionAlert", owner.toString(), this.permissionContext(config, "sendPanel"), formatPermissionList(this.permissionLanguage(config), check.missing)));
+      return;
+    }
     await this.sendManagedChannelMessage(channel, this.buildControlPanelCreateMessage(owner, pvc, channel.name, config));
     await this.sendOwnerGreeting(channel, owner, config);
   }
@@ -857,11 +973,22 @@ export class PrivateVoiceManager {
 
     const reused = await this.findReusablePrivateChannel(newState.guild, member.id);
     if (reused) {
+      const moveCheck = checkCanMoveMemberToVoice(member, reused.channel);
+      if (!moveCheck.ok) {
+        await this.notifyMissingPermissions(newState.guild, config, "moveMember", moveCheck.missing);
+        return false;
+      }
       await member.voice.setChannel(reused.channel);
       return oldState.channelId === reused.channel.id;
     }
 
     const created = await this.createPrivateVoiceChannel(newState.guild, member, config);
+    const moveCheck = checkCanMoveMemberToVoice(member, created.channel);
+    if (!moveCheck.ok) {
+      await this.notifyMissingPermissions(newState.guild, config, "moveMember", moveCheck.missing);
+      await this.removeTrackedChannel(created.channel.id, "Deleting a private voice channel after missing move permissions");
+      return false;
+    }
     await member.voice.setChannel(created.channel);
     await this.publishControlPanel(created.channel, member, created.pvc, config);
     return false;

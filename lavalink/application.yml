@@ -39,7 +39,7 @@ lavalink:
     resamplingQuality: LOW
     trackStuckThresholdMs: 10000
     useSeekGhosting: true
-    youtubePlaylistLoadLimit: 6
+    youtubePlaylistLoadLimit: 100
     playerUpdateInterval: 5
 
 plugins:
@@ -82,7 +82,7 @@ plugins:
       clientId: ${SPOTIFY_CLIENT_ID:}
       clientSecret: ${SPOTIFY_CLIENT_SECRET:}
       countryCode: "FR"
-      playlistLoadLimit: 2
+      playlistLoadLimit: 100
       albumLoadLimit: 2
       resolveArtistsInSearch: false
 

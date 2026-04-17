@@ -1,6 +1,6 @@
 {
   "name": "nook-discord-voice-music-bot",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Nook is a modern Discord voice and music bot featuring instant playlists, vibe-based playback, and seamless Lavalink integration.",
   "main": "index.js",
   "type": "module",

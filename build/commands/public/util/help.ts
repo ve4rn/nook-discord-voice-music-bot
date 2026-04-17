@@ -1,5 +1,6 @@
 import { ButtonBuilder, ButtonStyle, MessageFlags, PermissionFlagsBits, SeparatorSpacingSize } from "discord.js";
 import { CommandBuilder } from "../../../config/CommandBuilder.js";
+import { requireComponentReplyPermissions, requireTextReplyPermissions } from "../../../config/CommandPermissionGuards.js";
 import { NookBuilder } from "../../../config/NookBuilder.js";
 import { privateVoiceManager } from "../../../config/PrivateVoiceManager.js";
 import type { Command } from "../../../config/main.js";
@@ -138,6 +139,9 @@ export default CommandBuilder({
     permissions: [PermissionFlagsBits.SendMessages],
 }, async (interaction, app) => {
     const copy = await getHelpCopy(interaction.guildId);
+    if (!await requireTextReplyPermissions(interaction)) return;
+    if (!await requireComponentReplyPermissions(interaction)) return;
+
     const grouped = new Map<string, Command[]>();
     for (const command of app.commands.values()) {
         const visibility = command.visibility ?? "public";

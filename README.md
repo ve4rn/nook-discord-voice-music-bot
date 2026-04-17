@@ -96,11 +96,17 @@ LAVALINK_PASSWORD=youshallnotpass
 LAVALINK_SECURE=false
 ```
 
-Optional Spotify variables for LavaSrc:
+Optional Spotify variables for LavaSrc and Spotify track URL metadata:
 
 ```env
 SPOTIFY_CLIENT_ID=your_spotify_client_id
 SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
+```
+
+Optional Deezer API variables for `/play` playlist imports:
+
+```env
+DEEZER_ACCESS_TOKEN=your_deezer_access_token
 ```
 
 Generate Prisma and apply migrations:

@@ -13,6 +13,7 @@ import {
     StringSelectMenuInteraction,
 } from "discord.js";
 import { CommandBuilder } from "../../../config/CommandBuilder.js";
+import { requireComponentReplyPermissions, requireTextReplyPermissions } from "../../../config/CommandPermissionGuards.js";
 import { NookBuilder } from "../../../config/NookBuilder.js";
 import { privateVoiceManager } from "../../../config/PrivateVoiceManager.js";
 
@@ -533,6 +534,9 @@ async function updatePanel(interaction: SetupInteraction, section: SetupSection,
         await interaction.reply({ content: copy.fr.serverOnly, flags: MessageFlags.Ephemeral });
         return;
     }
+    if (!await requireTextReplyPermissions(interaction)) return;
+    if (!await requireComponentReplyPermissions(interaction)) return;
+
     await interaction.update({
         components: await setupComponents(interaction.guild, section),
         flags: MessageFlags.IsComponentsV2,
@@ -568,6 +572,8 @@ export async function handleSetupButton(interaction: ButtonInteraction) {
         await interaction.reply({ content: t.mismatch, flags: MessageFlags.Ephemeral });
         return true;
     }
+    if (!await requireTextReplyPermissions(interaction)) return true;
+
     if (!await canManage(interaction)) {
         await interaction.reply({ content: t.adminOnly, flags: MessageFlags.Ephemeral });
         return true;
@@ -587,6 +593,8 @@ export async function handleSetupStringSelect(interaction: StringSelectMenuInter
         await interaction.reply({ content: t.mismatch, flags: MessageFlags.Ephemeral });
         return true;
     }
+    if (!await requireTextReplyPermissions(interaction)) return true;
+
     if (!await canManage(interaction)) {
         await interaction.reply({ content: t.adminOnly, flags: MessageFlags.Ephemeral });
         return true;
@@ -621,6 +629,8 @@ export async function handleSetupChannelSelect(interaction: ChannelSelectMenuInt
         await interaction.reply({ content: t.mismatch, flags: MessageFlags.Ephemeral });
         return true;
     }
+    if (!await requireTextReplyPermissions(interaction)) return true;
+
     if (!await canManage(interaction)) {
         await interaction.reply({ content: t.adminOnly, flags: MessageFlags.Ephemeral });
         return true;
@@ -655,6 +665,8 @@ export default CommandBuilder({
     if (!interaction.guild) {
         return interaction.reply({ content: copy.fr.serverOnly, flags: MessageFlags.Ephemeral });
     }
+    if (!await requireTextReplyPermissions(interaction)) return;
+
     const t = await getCopy(interaction.guild.id);
     const member = interaction.member instanceof GuildMember
         ? interaction.member
@@ -662,6 +674,8 @@ export default CommandBuilder({
     if (!member?.permissions.has(PermissionFlagsBits.Administrator)) {
         return interaction.reply({ content: t.adminOnly, flags: MessageFlags.Ephemeral });
     }
+    if (!await requireComponentReplyPermissions(interaction)) return;
+
     return interaction.reply({
         components: await setupComponents(interaction.guild, "menu"),
         flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,

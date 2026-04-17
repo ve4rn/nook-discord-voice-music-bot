@@ -6,6 +6,7 @@ import {
     StringSelectMenuInteraction,
 } from "discord.js";
 import { CommandBuilder } from "../../../config/CommandBuilder.js";
+import { requireComponentReplyPermissions, requireTextReplyPermissions } from "../../../config/CommandPermissionGuards.js";
 import { NookBuilder } from "../../../config/NookBuilder.js";
 import type App from "../../../config/App.js";
 import { defaultAudioCommandCopy, getAudioCommandCopy, getPlayErrorMessage } from "../../../services/audio/audioCommandCache.js";
@@ -105,6 +106,7 @@ export async function handlePlaylistSelect(interaction: StringSelectMenuInteract
         await interaction.reply({ content: copy.playlist.guildMismatch, flags: MessageFlags.Ephemeral });
         return true;
     }
+    if (!await requireTextReplyPermissions(interaction)) return true;
 
     if (interaction.user.id !== parsed.userId) {
         await interaction.reply({ content: copy.playlist.ownerOnly, flags: MessageFlags.Ephemeral });
@@ -118,6 +120,8 @@ export async function handlePlaylistSelect(interaction: StringSelectMenuInteract
 
     const voiceChannelId = await requirePlayableVoice(interaction, app);
     if (!voiceChannelId) return true;
+    if (!await requireComponentReplyPermissions(interaction)) return true;
+
     if (!interaction.channelId) {
         await interaction.reply({ content: copy.playlist.addFailed, flags: MessageFlags.Ephemeral });
         return true;
@@ -196,6 +200,7 @@ export default CommandBuilder({
     if (!interaction.guildId) {
         return interaction.reply({ content: defaultAudioCommandCopy.playlist.serverOnly, flags: MessageFlags.Ephemeral });
     }
+    if (!await requireTextReplyPermissions(interaction)) return;
 
     const copy = await getAudioCommandCopy(interaction.guildId);
     const playlistId = interaction.options.getString("type", true);
@@ -220,6 +225,8 @@ export default CommandBuilder({
     if (availableSlots <= 0) {
         return interaction.reply({ content: copy.playlist.fullQueue, flags: MessageFlags.Ephemeral });
     }
+
+    if (!await requireComponentReplyPermissions(interaction)) return;
 
     return interaction.reply({
         components: [buildPlaylistPanel(playlist, interaction.guildId, interaction.user.id, copy, availableSlots)],
