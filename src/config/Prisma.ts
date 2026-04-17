@@ -1,6 +1,7 @@
 import { PrismaClient } from "@prisma/client";
+import { env } from "./env.js";
 
-const ENV = process.env.NODE_ENV?.toLowerCase() || "development";
+const ENV = env.runtime.nodeEnv;
 const IS_PROD = ENV === "production";
 const IS_TEST = ENV === "test";
 const IS_DEV  = !IS_PROD && !IS_TEST;
@@ -15,7 +16,7 @@ export const prisma: PrismaClient = g.__prisma ?? new PrismaClient({ log: prisma
 
 if (!IS_PROD) g.__prisma = prisma;
 
-const MAX_CONCURRENCY = Number(process.env.PRISMA_MAX_CONCURRENCY ?? 6);
+const MAX_CONCURRENCY = env.database.maxConcurrency;
 let current = 0;
 const queue: Array<() => void> = [];
 
@@ -70,19 +71,6 @@ export async function connectPrismaWithRetry(maxRetries = 8) {
   }
 }
 
-export async function prismaHealthcheck(timeoutMs = 1500): Promise<boolean> {
-  const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), timeoutMs);
-  try {
-    await prisma.$queryRawUnsafe("SELECT 1");
-    return true;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(t);
-  }
-}
-
 let shuttingDown = false;
 
 export async function disconnectPrisma() {
@@ -103,8 +91,6 @@ if (!IS_TEST) {
     await disconnectPrisma();
     process.exit(0);
   };
-  // @ts-ignore
   process.once("SIGINT", onExit);
-  // @ts-ignore
   process.once("SIGTERM", onExit);
 }

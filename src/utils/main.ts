@@ -13,6 +13,7 @@ import {
   PermissionsBitField,
   BitFieldResolvable,
   SlashCommandSubcommandBuilder,
+  PermissionFlagsBits,
 } from 'discord.js';
 
 type LocalizedConfig = {
@@ -30,6 +31,8 @@ type ChoiceLocalizationConfig = {
     name?: CommandLocalizationMap;
   };
 };
+
+type PermissionFlagName = Extract<keyof typeof PermissionFlagsBits, string>;
 
 type LocalizableBuilder = {
   setNameLocalizations?: (localizations: CommandLocalizationMap | null) => unknown;
@@ -120,7 +123,7 @@ export async function buildCommand(
   if (options.permissions?.length) {
     try {
       new PermissionsBitField(options.permissions as BitFieldResolvable<
-        any,
+        PermissionFlagName,
         bigint
       >[]);
     } catch {
@@ -142,7 +145,7 @@ export async function buildCommand(
           'Warn',
           `Property 'args[${i}].${prop}' is missing.`
         );
-      } else if (typeof (arg as any)[prop] !== 'string') {
+      } else if (typeof arg[prop as 'name' | 'description'] !== 'string') {
         new ConsoleMessage(
           'Warn',
           `Property 'args[${i}].${prop}' must be a string.`
@@ -178,7 +181,7 @@ export async function buildCommand(
 
   if (options.permissions?.length) {
     const raw = PermissionsBitField.resolve(
-      options.permissions as BitFieldResolvable<any, bigint>[]
+      options.permissions as BitFieldResolvable<PermissionFlagName, bigint>[]
     );
     builder.setDefaultMemberPermissions(raw.toString());
   }
@@ -191,7 +194,7 @@ export async function buildCommand(
     const required = arg.required ?? false;
     switch (arg.type) {
       case 'String':
-        return b.addStringOption((opt: any) => {
+        return b.addStringOption((opt) => {
           applyOptionBasics(opt, arg, required);
           if ('autocomplete' in arg && arg.autocomplete) {
             opt.setAutocomplete(true);
@@ -202,7 +205,7 @@ export async function buildCommand(
         }) as T;
 
       case 'Integer':
-        return b.addIntegerOption((opt: any) => {
+        return b.addIntegerOption((opt) => {
           applyOptionBasics(opt, arg, required);
           if ('autocomplete' in arg && arg.autocomplete) {
             opt.setAutocomplete(true);
@@ -213,7 +216,7 @@ export async function buildCommand(
         }) as T;
 
       case 'Number':
-        return b.addNumberOption((opt: any) => {
+        return b.addNumberOption((opt) => {
           applyOptionBasics(opt, arg, required);
           if ('autocomplete' in arg && arg.autocomplete) {
             opt.setAutocomplete(true);
@@ -224,32 +227,32 @@ export async function buildCommand(
         }) as T;
 
       case 'Boolean':
-        return b.addBooleanOption((opt: any) =>
+        return b.addBooleanOption((opt) =>
           applyOptionBasics(opt, arg, required)
         ) as T;
 
       case 'User':
-        return b.addUserOption((opt: any) =>
+        return b.addUserOption((opt) =>
           applyOptionBasics(opt, arg, required)
         ) as T;
 
       case 'Channel':
-        return b.addChannelOption((opt: any) =>
+        return b.addChannelOption((opt) =>
           applyOptionBasics(opt, arg, required)
         ) as T;
 
       case 'Role':
-        return b.addRoleOption((opt: any) =>
+        return b.addRoleOption((opt) =>
           applyOptionBasics(opt, arg, required)
         ) as T;
 
       case 'Mentionable':
-        return b.addMentionableOption((opt: any) =>
+        return b.addMentionableOption((opt) =>
           applyOptionBasics(opt, arg, required)
         ) as T;
 
       case 'Attachment':
-        return b.addAttachmentOption((opt: any) =>
+        return b.addAttachmentOption((opt) =>
           applyOptionBasics(opt, arg, required)
         ) as T;
 

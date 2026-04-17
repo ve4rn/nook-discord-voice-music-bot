@@ -1,6 +1,5 @@
 import { App, AppManager, Intents } from './dist/main.js';
-import dotenv from 'dotenv';
-dotenv.config();
+import { env } from './dist/config/env.js';
 
 const app = new App({
     intents: [
@@ -9,4 +8,4 @@ const app = new App({
     ],
 })
 
-new AppManager(process.env.CLIENT_ID, process.env.GUILD_ID, app)
+new AppManager(env.discord.clientId, env.discord.guildId ?? undefined, app)

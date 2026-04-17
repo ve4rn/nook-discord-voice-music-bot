@@ -1,3 +1,5 @@
+import { env } from "./env.js";
+
 export type ConsoleMessageType = "Warn" | "Error" | "Info" | "Success" | "Debug";
 
 type ConsoleMessageOptions = {
@@ -19,7 +21,7 @@ const colors = {
 };
 
 function shouldUseColor() {
-    return process.env.NO_COLOR !== "1" && process.env.NO_COLOR !== "true";
+    return !env.runtime.noColor;
 }
 
 function paint(value: string, color: string) {

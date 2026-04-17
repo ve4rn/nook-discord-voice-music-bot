@@ -9,11 +9,12 @@
   },
   "scripts": {
     "build": "tsc",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "start": "node index.js",
     "setup:lavalink": "powershell -ExecutionPolicy Bypass -File scripts/setup-lavalink.ps1",
     "start:lavalink": "powershell -ExecutionPolicy Bypass -File scripts/start-lavalink.ps1",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run"
   },
   "keywords": [
     "discord",
@@ -40,5 +41,11 @@
     "lavalink-client": "^2.10.0",
     "prisma": "^6.4.1",
     "typescript": "^5.8.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "eslint": "^9.39.1",
+    "typescript-eslint": "^8.46.4",
+    "vitest": "^4.0.8"
   }
 }

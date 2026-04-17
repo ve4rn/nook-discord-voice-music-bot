@@ -3,7 +3,6 @@ import {
     PermissionFlagsBits, 
     ChatInputCommandInteraction, 
     ClientEvents, 
-    Message,
     AutocompleteInteraction
  } from 'discord.js';
 import type { LocalizationMap } from 'discord.js';
@@ -110,11 +109,11 @@ type CommandBuilderOptions = SlashCommandBuilderOptions;
 type AutoCompleteFunction = (
   interaction: AutocompleteInteraction,
   app: App
-) => Promise<void | any>;
+) => Promise<unknown | void>;
 type ExecuteFunction = (
   interaction: ChatInputCommandInteraction,
   app: App
-) => Promise<any | void>;
+) => Promise<unknown | void>;
 
 interface Command {
   options: CommandBuilderOptions;

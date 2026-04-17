@@ -35,7 +35,11 @@ import {
   formatPermissionList,
   type PermissionLanguage,
 } from "./PermissionChecks.js";
-import { prisma } from "./Prisma.js";
+import { env } from "./env.js";
+import { BotUserUnavailableError, MissingDiscordPermissionError, PrivateVoiceCategoryNotFoundError } from "../domain/errors/index.js";
+import { GuildDataRepository } from "../repositories/GuildDataRepository.js";
+import { PrivateVoiceRepository } from "../repositories/PrivateVoiceRepository.js";
+import { PrivateVoicePermissionService } from "../services/privateVoice/PrivateVoicePermissionService.js";
 
 type SupportedLanguage = "fr" | "en" | "es" | "de";
 type PanelAction = "toggle" | "rename" | "rename_input" | "access";
@@ -293,11 +297,6 @@ const BOT_CHANNEL_PERMISSIONS: PermissionResolvable[] = [
   PermissionFlagsBits.ManageMessages,
 ];
 
-function parsePositiveInteger(rawValue: string | undefined, fallback: number): number {
-  const parsed = Number.parseInt(rawValue ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
 function parseLanguage(rawValue: string | null | undefined): SupportedLanguage {
   if (rawValue === "en" || rawValue === "es" || rawValue === "de") return rawValue;
   return "fr";
@@ -305,10 +304,6 @@ function parseLanguage(rawValue: string | null | undefined): SupportedLanguage {
 
 function sanitizeChannelName(input: string): string {
   return input.replace(/\s+/g, " ").trim().slice(0, 100);
-}
-
-function composeAllowedIds(ownerId: string, selectedUserIds: string[]): string[] {
-  return Array.from(new Set([ownerId, ...selectedUserIds]));
 }
 
 function parsePanelCustomId(customId: string): ParsedCustomId | null {
@@ -344,6 +339,9 @@ function createPrivateChannelCacheEntry(value: PrivateVoiceChannel): PrivateChan
 export class PrivateVoiceManager {
   private app: App | null = null;
   private fallbackGuildId: string | null = null;
+  private readonly repository = new PrivateVoiceRepository();
+  private readonly guildDataRepository = new GuildDataRepository();
+  private readonly permissionService = new PrivateVoicePermissionService();
   private readonly memberLocks = new Map<string, Promise<unknown>>();
   private readonly cleanupTimers = new Map<string, NodeJS.Timeout>();
   readonly guildConfigCache = new Map<string, PrivateVoiceGuildConfig | null>();
@@ -395,7 +393,7 @@ export class PrivateVoiceManager {
 
       const oldChannel = await this.fetchVoiceChannelFromGuild(oldState.guild, oldState.channelId);
     if (!oldChannel) {
-        await prisma.privateVoiceChannel.deleteMany({ where: { channelId: oldState.channelId } });
+        await this.repository.deletePrivateChannelByChannelId(oldState.channelId);
         this.privateChannelCache.delete(oldState.channelId);
         this.unmanagedChannelCache.add(oldState.channelId);
         return;
@@ -412,7 +410,7 @@ export class PrivateVoiceManager {
 
   async handleChannelDelete(channel: ClientEvents["channelDelete"][0]) {
     if (!isManagedVoiceChannel(channel)) return;
-    await prisma.privateVoiceChannel.deleteMany({ where: { channelId: channel.id } });
+    await this.repository.deletePrivateChannelByChannelId(channel.id);
     this.privateChannelCache.delete(channel.id);
     this.unmanagedChannelCache.delete(channel.id);
   }
@@ -434,23 +432,8 @@ export class PrivateVoiceManager {
   }
 
   async setGuildLanguage(guildId: string, language: string) {
-    const envCreateChannelId = process.env.PRIVATE_VOICE_CREATE_CHANNEL_ID?.trim();
-    const envCategoryId = process.env.PRIVATE_VOICE_CATEGORY_ID?.trim();
-
-    const config = await prisma.privateVoiceGuildConfig.upsert({
-      where: { guildId },
-      update: { lang: language },
-      create: {
-        guildId,
-        createChannelId: envCreateChannelId || PLACEHOLDER_CHANNEL_ID,
-        categoryId: envCategoryId || PLACEHOLDER_CHANNEL_ID,
-        enabled: true,
-        lang: language,
-        maxAllowedUsers: Math.min(parsePositiveInteger(process.env.PVC_MAX_ALLOWED_USERS, 10), 25),
-        panelMentionTtlMs: parsePositiveInteger(process.env.PVC_PANEL_MENTION_TTL_MS, 3_000),
-        emptyChannelSweepMs: parsePositiveInteger(process.env.PVC_EMPTY_CHANNEL_SWEEP_MS, 60_000),
-      },
-    });
+    await this.getOrCreateGuildConfig(guildId);
+    const config = await this.repository.updateGuildConfig(guildId, { lang: language });
 
     this.guildConfigCache.set(guildId, config);
     await this.refreshCleanupTimers();
@@ -461,26 +444,13 @@ export class PrivateVoiceManager {
     const cached = this.guildConfigCache.get(guildId);
     if (cached) return cached;
 
-    const existing = await prisma.privateVoiceGuildConfig.findUnique({ where: { guildId } });
+    const existing = await this.repository.findGuildConfig(guildId);
     if (existing) {
       this.guildConfigCache.set(guildId, existing);
       return existing;
     }
 
-    const envCreateChannelId = process.env.PRIVATE_VOICE_CREATE_CHANNEL_ID?.trim();
-    const envCategoryId = process.env.PRIVATE_VOICE_CATEGORY_ID?.trim();
-    const config = await prisma.privateVoiceGuildConfig.create({
-      data: {
-        guildId,
-        createChannelId: envCreateChannelId || PLACEHOLDER_CHANNEL_ID,
-        categoryId: envCategoryId || PLACEHOLDER_CHANNEL_ID,
-        enabled: true,
-        lang: parseLanguage(process.env.PVC_LANG),
-        maxAllowedUsers: Math.min(parsePositiveInteger(process.env.PVC_MAX_ALLOWED_USERS, 10), 25),
-        panelMentionTtlMs: parsePositiveInteger(process.env.PVC_PANEL_MENTION_TTL_MS, 3_000),
-        emptyChannelSweepMs: parsePositiveInteger(process.env.PVC_EMPTY_CHANNEL_SWEEP_MS, 60_000),
-      },
-    });
+    const config = await this.repository.createGuildConfig(guildId, this.defaultGuildConfigValues());
 
     this.guildConfigCache.set(guildId, config);
     await this.refreshCleanupTimers();
@@ -489,10 +459,7 @@ export class PrivateVoiceManager {
 
   async updateGuildConfig(guildId: string, data: PrivateVoiceGuildConfigUpdate) {
     await this.getOrCreateGuildConfig(guildId);
-    const config = await prisma.privateVoiceGuildConfig.update({
-      where: { guildId },
-      data,
-    });
+    const config = await this.repository.updateGuildConfig(guildId, data);
     this.guildConfigCache.set(guildId, config);
     await this.refreshCleanupTimers();
     return config;
@@ -508,67 +475,56 @@ export class PrivateVoiceManager {
       if (channel.value.guildId === guildId) this.privateChannelCache.delete(channelId);
     }
 
-    const [
-      currentTracksDetached,
-      audioTracks,
-      audioStates,
-      privateChannels,
-      privateConfig,
-    ] = await prisma.$transaction([
-      prisma.guildAudioState.updateMany({
-        where: { guildId },
-        data: { currentTrackId: null },
-      }),
-      prisma.track.deleteMany({ where: { guildId } }),
-      prisma.guildAudioState.deleteMany({ where: { guildId } }),
-      prisma.privateVoiceChannel.deleteMany({ where: { guildId } }),
-      prisma.privateVoiceGuildConfig.deleteMany({ where: { guildId } }),
-    ]);
+    return this.guildDataRepository.deleteGuildData(guildId);
+  }
 
+  private defaultGuildConfigValues() {
     return {
-      currentTracksDetached: currentTracksDetached.count,
-      audioTracks: audioTracks.count,
-      audioStates: audioStates.count,
-      privateChannels: privateChannels.count,
-      privateConfig: privateConfig.count,
+      createChannelId: env.privateVoice.createChannelId ?? PLACEHOLDER_CHANNEL_ID,
+      categoryId: env.privateVoice.categoryId ?? PLACEHOLDER_CHANNEL_ID,
+      enabled: true,
+      lang: env.privateVoice.language,
+      maxAllowedUsers: env.privateVoice.maxAllowedUsers,
+      panelMentionTtlMs: env.privateVoice.panelMentionTtlMs,
+      emptyChannelSweepMs: env.privateVoice.emptyChannelSweepMs,
     };
   }
 
   private async bootstrapFallbackConfig() {
     if (!this.fallbackGuildId) return;
-    const envCreateChannelId = process.env.PRIVATE_VOICE_CREATE_CHANNEL_ID?.trim();
-    const envCategoryId = process.env.PRIVATE_VOICE_CATEGORY_ID?.trim();
+    const envCreateChannelId = env.privateVoice.createChannelId;
+    const envCategoryId = env.privateVoice.categoryId;
     const hasEnvVoiceConfig = Boolean(envCreateChannelId && envCategoryId);
     const createChannelId = envCreateChannelId || PLACEHOLDER_CHANNEL_ID;
     const categoryId = envCategoryId || PLACEHOLDER_CHANNEL_ID;
 
-    const config = await prisma.privateVoiceGuildConfig.upsert({
-      where: { guildId: this.fallbackGuildId },
-      update: hasEnvVoiceConfig ? {
+    const config = await this.repository.upsertGuildConfig(this.fallbackGuildId, {
+      createChannelId,
+      categoryId,
+      enabled: true,
+      lang: env.privateVoice.language,
+      maxAllowedUsers: env.privateVoice.maxAllowedUsers,
+      panelMentionTtlMs: env.privateVoice.panelMentionTtlMs,
+      emptyChannelSweepMs: env.privateVoice.emptyChannelSweepMs,
+    });
+    if (hasEnvVoiceConfig) {
+      const updatedConfig = await this.repository.updateGuildConfig(this.fallbackGuildId, {
         createChannelId: envCreateChannelId!,
         categoryId: envCategoryId!,
         enabled: true,
-        maxAllowedUsers: Math.min(parsePositiveInteger(process.env.PVC_MAX_ALLOWED_USERS, 10), 25),
-        panelMentionTtlMs: parsePositiveInteger(process.env.PVC_PANEL_MENTION_TTL_MS, 3_000),
-        emptyChannelSweepMs: parsePositiveInteger(process.env.PVC_EMPTY_CHANNEL_SWEEP_MS, 60_000),
-      } : {},
-      create: {
-        guildId: this.fallbackGuildId,
-        createChannelId,
-        categoryId,
-        enabled: true,
-        lang: parseLanguage(process.env.PVC_LANG),
-        maxAllowedUsers: Math.min(parsePositiveInteger(process.env.PVC_MAX_ALLOWED_USERS, 10), 25),
-        panelMentionTtlMs: parsePositiveInteger(process.env.PVC_PANEL_MENTION_TTL_MS, 3_000),
-        emptyChannelSweepMs: parsePositiveInteger(process.env.PVC_EMPTY_CHANNEL_SWEEP_MS, 60_000),
-      },
-    });
+        maxAllowedUsers: env.privateVoice.maxAllowedUsers,
+        panelMentionTtlMs: env.privateVoice.panelMentionTtlMs,
+        emptyChannelSweepMs: env.privateVoice.emptyChannelSweepMs,
+      });
+      this.guildConfigCache.set(this.fallbackGuildId, updatedConfig);
+      return;
+    }
     this.guildConfigCache.set(this.fallbackGuildId, config);
   }
 
   private async getGuildConfig(guildId: string) {
     if (this.guildConfigCache.has(guildId)) return this.guildConfigCache.get(guildId) ?? null;
-    let config = await prisma.privateVoiceGuildConfig.findUnique({ where: { guildId } });
+    let config = await this.repository.findGuildConfig(guildId);
     if (!config && guildId === this.fallbackGuildId) {
       await this.bootstrapFallbackConfig();
       config = this.guildConfigCache.get(guildId) ?? null;
@@ -578,11 +534,11 @@ export class PrivateVoiceManager {
   }
 
   private async preloadCaches() {
-    const configs = await prisma.privateVoiceGuildConfig.findMany();
+    const configs = await this.repository.listGuildConfigs();
     this.guildConfigCache.clear();
     for (const config of configs) this.guildConfigCache.set(config.guildId, config);
 
-    const privateChannels = await prisma.privateVoiceChannel.findMany();
+    const privateChannels = await this.repository.listPrivateChannels();
     this.privateChannelCache.clear();
     this.unmanagedChannelCache.clear();
     for (const channel of privateChannels) this.cachePrivateChannel(channel);
@@ -596,7 +552,7 @@ export class PrivateVoiceManager {
     if (cached) this.privateChannelCache.delete(channelId);
     if (this.unmanagedChannelCache.has(channelId)) return null;
 
-    const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+    const pvc = await this.repository.findPrivateChannelById(channelId);
     if (!pvc) {
       this.unmanagedChannelCache.add(channelId);
       return null;
@@ -614,7 +570,7 @@ export class PrivateVoiceManager {
     if (cached) this.privateChannelCache.delete(channelId);
     if (this.unmanagedChannelCache.has(channelId)) return null;
 
-    const pvc = await prisma.privateVoiceChannel.findUnique({ where: { channelId } });
+    const pvc = await this.repository.findPrivateChannelById(channelId);
     if (!pvc) {
       this.unmanagedChannelCache.add(channelId);
       return null;
@@ -725,7 +681,7 @@ export class PrivateVoiceManager {
     });
 
     if (isManagedVoiceChannel(channel)) await this.safelyDeleteChannel(channel, reason);
-    await prisma.privateVoiceChannel.deleteMany({ where: { channelId } });
+    await this.repository.deletePrivateChannelByChannelId(channelId);
     this.privateChannelCache.delete(channelId);
     this.unmanagedChannelCache.add(channelId);
   }
@@ -756,9 +712,14 @@ export class PrivateVoiceManager {
   }
 
   private isMemberAllowed(member: GuildMember, pvc: PrivateVoiceChannel): boolean {
-    if (member.id === pvc.ownerId) return true;
-    if (member.permissions.has(PermissionFlagsBits.Administrator) || member.permissions.has(PermissionFlagsBits.ManageChannels)) return true;
-    return !pvc.isPrivate || pvc.allowedIds.includes(member.id);
+    return this.permissionService.canMemberJoinPrivateVoiceChannel({
+      memberId: member.id,
+      ownerId: pvc.ownerId,
+      isPrivate: pvc.isPrivate,
+      allowedIds: pvc.allowedIds,
+      hasAdministratorPermission: member.permissions.has(PermissionFlagsBits.Administrator),
+      hasManageChannelsPermission: member.permissions.has(PermissionFlagsBits.ManageChannels),
+    });
   }
 
   private resolveMemberAccentColor(member: GuildMember): number {
@@ -770,12 +731,12 @@ export class PrivateVoiceManager {
 
   private async syncChannelPermissions(guild: Guild, channel: VoiceChannel, pvc: PrivateVoiceChannel, config: PrivateVoiceGuildConfig) {
     const botUserId = guild.client.user?.id;
-    if (!botUserId) throw new Error("Bot user is not available.");
+    if (!botUserId) throw new BotUserUnavailableError();
 
     const manageCheck = checkCanManageVoiceChannel(channel);
     if (!manageCheck.ok) {
       await this.notifyMissingPermissions(guild, config, "managePermissions", manageCheck.missing);
-      throw new Error(`Missing permissions to manage private voice channel ${channel.id}: ${manageCheck.missing.join(", ")}`);
+      throw new MissingDiscordPermissionError(manageCheck.missing);
     }
 
     const overwrites: OverwriteResolvable[] = [
@@ -884,13 +845,13 @@ export class PrivateVoiceManager {
   private async createPrivateVoiceChannel(guild: Guild, owner: GuildMember, config: PrivateVoiceGuildConfig) {
     const category = guild.channels.cache.get(config.categoryId) ?? await guild.channels.fetch(config.categoryId);
     if (!category || category.type !== ChannelType.GuildCategory) {
-      throw new Error(`Configured category ${config.categoryId} was not found or is not a category.`);
+      throw new PrivateVoiceCategoryNotFoundError(config.categoryId);
     }
 
     const createCheck = checkCanCreateVoiceInCategory(guild, category);
     if (!createCheck.ok) {
       await this.notifyMissingPermissions(guild, config, "createVoice", createCheck.missing);
-      throw new Error(`Missing permissions to create private voice channel in category ${category.id}: ${createCheck.missing.join(", ")}`);
+      throw new MissingDiscordPermissionError(createCheck.missing);
     }
 
     const channelName = sanitizeChannelName(translations[parseLanguage(config.lang)].defaultChannelName(owner.displayName));
@@ -907,14 +868,12 @@ export class PrivateVoiceManager {
     });
 
     try {
-      const pvc = await prisma.privateVoiceChannel.create({
-        data: {
-          guildId: guild.id,
-          allowedIds: [owner.id],
-          channelId: channel.id,
-          isPrivate: true,
-          ownerId: owner.id,
-        },
+      const pvc = await this.repository.createPrivateChannel({
+        guildId: guild.id,
+        allowedIds: [owner.id],
+        channelId: channel.id,
+        isPrivate: true,
+        ownerId: owner.id,
       });
 
       this.cachePrivateChannel(pvc);
@@ -922,7 +881,7 @@ export class PrivateVoiceManager {
       const voiceAccessCheck = checkVoiceChannelAccess(channel);
       if (!voiceAccessCheck.ok) {
         await this.notifyMissingPermissions(guild, config, "joinVoice", voiceAccessCheck.missing);
-        throw new Error(`Missing bot voice access in private voice channel ${channel.id}: ${voiceAccessCheck.missing.join(", ")}`);
+        throw new MissingDiscordPermissionError(voiceAccessCheck.missing);
       }
       return { channel, pvc };
     } catch (error) {
@@ -947,7 +906,7 @@ export class PrivateVoiceManager {
     }
 
     if (staleChannelIds.length > 0) {
-      await prisma.privateVoiceChannel.deleteMany({ where: { channelId: { in: staleChannelIds } } });
+      await this.repository.deletePrivateChannelsByIds(staleChannelIds);
       for (const channelId of staleChannelIds) {
         this.privateChannelCache.delete(channelId);
         this.unmanagedChannelCache.add(channelId);
@@ -1000,12 +959,9 @@ export class PrivateVoiceManager {
     const nextOwner = channel.members.find(member => !member.user.bot);
     if (!nextOwner) return;
 
-    const updated = await prisma.privateVoiceChannel.update({
-      where: { channelId: channel.id },
-      data: {
-        allowedIds: composeAllowedIds(nextOwner.id, pvc.allowedIds),
-        ownerId: nextOwner.id,
-      },
+    const updated = await this.repository.updatePrivateChannel(channel.id, {
+      allowedIds: this.permissionService.composeAllowedMemberIds(nextOwner.id, pvc.allowedIds),
+      ownerId: nextOwner.id,
     });
 
     this.cachePrivateChannel(updated);
@@ -1020,7 +976,7 @@ export class PrivateVoiceManager {
 
     const channel = await this.fetchVoiceChannelFromGuild(guild, channelId);
     if (!channel) {
-      await prisma.privateVoiceChannel.deleteMany({ where: { channelId } });
+      await this.repository.deletePrivateChannelByChannelId(channelId);
       this.privateChannelCache.delete(channelId);
       this.unmanagedChannelCache.add(channelId);
       return null;
@@ -1075,9 +1031,8 @@ export class PrivateVoiceManager {
       return;
     }
 
-    const updated = await prisma.privateVoiceChannel.update({
-      where: { channelId: parsed.channelId },
-      data: { isPrivate: !tracked.pvc.isPrivate },
+    const updated = await this.repository.updatePrivateChannel(parsed.channelId, {
+      isPrivate: !tracked.pvc.isPrivate,
     });
 
     this.cachePrivateChannel(updated);
@@ -1130,11 +1085,8 @@ export class PrivateVoiceManager {
 
     await interaction.deferUpdate();
 
-    const allowedIds = composeAllowedIds(parsed.ownerId, interaction.values.slice(0, tracked.config.maxAllowedUsers));
-    const updated = await prisma.privateVoiceChannel.update({
-      where: { channelId: parsed.channelId },
-      data: { allowedIds },
-    });
+    const allowedIds = this.permissionService.composeAllowedMemberIds(parsed.ownerId, interaction.values.slice(0, tracked.config.maxAllowedUsers));
+    const updated = await this.repository.updatePrivateChannel(parsed.channelId, { allowedIds });
 
     this.cachePrivateChannel(updated);
     await this.syncChannelPermissions(guild, tracked.channel, updated, tracked.config);
@@ -1154,7 +1106,7 @@ export class PrivateVoiceManager {
     });
 
     if (!channel || !isManagedVoiceChannel(channel)) {
-      await prisma.privateVoiceChannel.deleteMany({ where: { channelId } });
+      await this.repository.deletePrivateChannelByChannelId(channelId);
       this.privateChannelCache.delete(channelId);
       this.unmanagedChannelCache.add(channelId);
       return;
@@ -1163,7 +1115,7 @@ export class PrivateVoiceManager {
     if (channel.members.size > 0) return;
 
     await this.safelyDeleteChannel(channel, "Deleting an empty private voice channel");
-    await prisma.privateVoiceChannel.deleteMany({ where: { channelId } });
+    await this.repository.deletePrivateChannelByChannelId(channelId);
     this.privateChannelCache.delete(channelId);
     this.unmanagedChannelCache.add(channelId);
   }
@@ -1210,7 +1162,7 @@ export class PrivateVoiceManager {
       });
 
       if (!channel || !isManagedVoiceChannel(channel)) {
-        await prisma.privateVoiceChannel.deleteMany({ where: { channelId: pvc.channelId } });
+        await this.repository.deletePrivateChannelByChannelId(pvc.channelId);
         this.privateChannelCache.delete(pvc.channelId);
         this.unmanagedChannelCache.add(pvc.channelId);
         continue;

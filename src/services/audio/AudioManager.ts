@@ -3,34 +3,25 @@ import { ChannelType, MessageFlags, type TextChannel, type VoiceBasedChannel, ty
 import type App from "../../config/App.js";
 import { NookBuilder } from "../../config/NookBuilder.js";
 import { checkCanSendComponents } from "../../config/PermissionChecks.js";
-import { AudioStateRepository } from "./AudioStateRepository.js";
+import { env } from "../../config/env.js";
+import { AudioStateRepository } from "../../repositories/AudioStateRepository.js";
+import { LavalinkNotReadyError, QueueLimitReachedError, TrackNotFoundError } from "../../domain/errors/index.js";
+import { AudioPlaybackService } from "./AudioPlaybackService.js";
+import { AudioQueueService } from "./AudioQueueService.js";
 import { TrackSearchService } from "./TrackSearchService.js";
 import { getAudioCommandCopy } from "./audioCommandCache.js";
-import { getAudioQueueAvailableSlots, getStoredTrackKey, MAX_AUDIO_QUEUE_SIZE, StoredTrack, trackToStored } from "./types.js";
+import { getAudioQueueAvailableSlots, getStoredTrackKey, MAX_AUDIO_QUEUE_SIZE, StoredTrack, trackToStored, type PlaybackContext, type TrackRequest } from "./types.js";
 import type { PlaylistTrackConfig } from "./playlists.js";
 
-type PlayRequest = {
-    guildId: string;
-    voiceChannelId: string;
-    textChannelId: string;
-    query: string;
-    requestedBy: string;
-};
-
-type PlaylistAddRequest = {
-    guildId: string;
-    voiceChannelId: string;
-    textChannelId: string;
-    requestedBy: string;
+type PlaylistAddRequest = PlaybackContext & {
     tracks: PlaylistTrackConfig[];
 };
-
-const LAVALINK_PLAY_RETRIES = 1;
-const LAVALINK_PLAY_RETRY_DELAY_MS = 750;
 
 export class AudioManager {
     readonly lavalink: LavalinkManager;
     readonly search: TrackSearchService;
+    private readonly playbackService = new AudioPlaybackService();
+    private readonly queueService = new AudioQueueService();
     private readonly repository = new AudioStateRepository();
     private readonly lastPositionSync = new Map<string, number>();
     private readonly skipVotes = new Map<string, { trackKey: string; votes: Set<string> }>();
@@ -43,10 +34,10 @@ export class AudioManager {
             nodes: [
                 {
                     id: "main",
-                    host: process.env.LAVALINK_HOST ?? "localhost",
-                    port: Number(process.env.LAVALINK_PORT ?? 2333),
-                    authorization: process.env.LAVALINK_PASSWORD ?? "youshallnotpass",
-                    secure: process.env.LAVALINK_SECURE === "true",
+                    host: env.lavalink.host,
+                    port: env.lavalink.port,
+                    authorization: env.lavalink.password,
+                    secure: env.lavalink.secure,
                 },
             ],
             sendToShard: (guildId, payload) => {
@@ -88,7 +79,7 @@ export class AudioManager {
 
     async sendRaw(payload: unknown) {
         if (!this.lavalink.initiated) return;
-        await this.lavalink.sendRawData(payload as any);
+        await this.lavalink.sendRawData(payload as Parameters<LavalinkManager["sendRawData"]>[0]);
     }
 
     async restoreStates() {
@@ -152,14 +143,14 @@ export class AudioManager {
         await this.sendVoiceDisconnectedNotice(guildId, textChannelId);
     }
 
-    async play(request: PlayRequest) {
+    async play(request: TrackRequest) {
         if (!this.lavalink.useable) {
-            throw new Error("LAVALINK_NOT_READY");
+            throw new LavalinkNotReadyError();
         }
 
         const choice = await this.search.resolve(request.query, request.requestedBy);
         if (!choice?.lavalinkTrack) {
-            throw new Error("TRACK_NOT_FOUND");
+            throw new TrackNotFoundError();
         }
 
         this.clearEmptyDisconnectTimer(request.guildId);
@@ -175,7 +166,12 @@ export class AudioManager {
         player.queue.add(choice.lavalinkTrack);
         await this.repository.setCurrent(request.guildId, choice.track);
         try {
-            await this.playWithRetry(player, request.guildId, "play command");
+            await this.playbackService.playWithRetry(
+                player,
+                request.guildId,
+                "play command",
+                () => Boolean(this.lavalink.getPlayer(request.guildId)?.playing),
+            );
         } catch (error) {
             await this.rollbackFailedPlayback(request.guildId, player);
             throw error;
@@ -185,17 +181,17 @@ export class AudioManager {
 
     async addPlaylistTracks(request: PlaylistAddRequest) {
         if (!this.lavalink.useable) {
-            throw new Error("LAVALINK_NOT_READY");
+            throw new LavalinkNotReadyError();
         }
 
         const state = await this.getQueue(request.guildId);
         const availableSlots = getAudioQueueAvailableSlots(state);
-        if (availableSlots <= 0) throw new Error("QUEUE_LIMIT_REACHED");
+        if (availableSlots <= 0) throw new QueueLimitReachedError();
 
         const requestedTracks = request.tracks.slice(0, availableSlots);
         const player = await this.join(request.guildId, request.voiceChannelId, request.textChannelId);
         const resolvedTracks = await this.resolvePlaylistTracks(player, requestedTracks, request.requestedBy);
-        if (resolvedTracks.length === 0) throw new Error("TRACK_NOT_FOUND");
+        if (resolvedTracks.length === 0) throw new TrackNotFoundError();
 
         this.clearEmptyDisconnectTimer(request.guildId);
         const shouldQueue = player.playing || player.paused || !!player.queue.current;
@@ -205,7 +201,12 @@ export class AudioManager {
             player.queue.add(firstTrack);
             await this.repository.setCurrent(request.guildId, trackToStored(firstTrack, request.requestedBy));
             try {
-                await this.playWithRetry(player, request.guildId, "playlist");
+                await this.playbackService.playWithRetry(
+                    player,
+                    request.guildId,
+                    "playlist",
+                    () => Boolean(this.lavalink.getPlayer(request.guildId)?.playing),
+                );
             } catch (error) {
                 await this.rollbackFailedPlayback(request.guildId, player);
                 throw error;
@@ -244,23 +245,23 @@ export class AudioManager {
         if (!player?.queue.current) return { skipped: false, votes: 0, needed: 0, listeners: 0 };
 
         const listeners = this.getNonBotListenerIds(guildId, player.voiceChannelId);
-        const needed = Math.max(1, Math.floor(listeners.length / 2) + 1);
         const trackKey = this.getCurrentTrackKey(player.queue.current);
-        const currentVote = this.skipVotes.get(guildId);
-        const vote = currentVote?.trackKey === trackKey
-            ? currentVote
-            : { trackKey, votes: new Set<string>() };
+        const voteResult = this.queueService.registerSkipVote(this.skipVotes.get(guildId), trackKey, userId, listeners.length);
+        this.skipVotes.set(guildId, voteResult.vote);
 
-        vote.votes.add(userId);
-        this.skipVotes.set(guildId, vote);
-
-        if (listeners.length <= 1 || vote.votes.size >= needed) {
+        if (voteResult.shouldSkip) {
             this.skipVotes.delete(guildId);
-            const result = await this.skip(guildId);
-            return { skipped: result.skipped, reason: result.reason, votes: vote.votes.size, needed, listeners: listeners.length };
+            const skipResult = await this.skip(guildId);
+            return {
+                skipped: skipResult.skipped,
+                reason: skipResult.reason,
+                votes: voteResult.vote.votes.size,
+                needed: voteResult.needed,
+                listeners: voteResult.listeners,
+            };
         }
 
-        return { skipped: false, votes: vote.votes.size, needed, listeners: listeners.length };
+        return { skipped: false, votes: voteResult.vote.votes.size, needed: voteResult.needed, listeners: voteResult.listeners };
     }
 
     async removeQueuedTrack(guildId: string, queueIndex: number, userId: string, expectedKey?: string) {
@@ -295,13 +296,12 @@ export class AudioManager {
     async shuffleQueue(guildId: string) {
         const player = this.lavalink.getPlayer(guildId);
         if (player) {
-            const displayedCount = player.queue.tracks.length + (player.queue.current ? 1 : 0);
-            if (!player.queue.current || displayedCount < 5 || player.queue.tracks.length < 4) {
+            if (!this.queueService.canShuffleQueue(player.queue.current ? 1 : 0, player.queue.tracks.length)) {
                 return { shuffled: false as const, reason: "too_small" as const };
             }
 
             const tracks = [...player.queue.tracks] as Track[];
-            const shuffledTracks = this.shuffleTracks(tracks);
+            const shuffledTracks = this.queueService.shuffleTracks(tracks);
             await player.queue.splice(0, player.queue.tracks.length, shuffledTracks);
             await this.repository.replaceQueue(
                 guildId,
@@ -311,12 +311,11 @@ export class AudioManager {
         }
 
         const state = await this.repository.getOrCreate(guildId);
-        const displayedCount = state.queue.length + (state.currentTrack ? 1 : 0);
-        if (!state.currentTrack || displayedCount < 5 || state.queue.length < 4) {
+        if (!this.queueService.canShuffleQueue(state.currentTrack ? 1 : 0, state.queue.length)) {
             return { shuffled: false as const, reason: "too_small" as const };
         }
 
-        const shuffledQueue = this.shuffleTracks(this.repository.getQueueFromState(state));
+        const shuffledQueue = this.queueService.shuffleTracks(this.repository.getQueueFromState(state));
         await this.repository.replaceQueue(guildId, shuffledQueue);
         return { shuffled: true as const };
     }
@@ -327,8 +326,6 @@ export class AudioManager {
 
         const state = await this.repository.getOrCreate(guildId);
         const loop = state.loop ?? false;
-        const queue = this.repository.getQueueFromState(state);
-
         if (player.queue.tracks.length === 0) {
             await player.stopPlaying(true).catch(() => null);
             await this.repository.markStoppedKeepQueue(guildId);
@@ -445,51 +442,9 @@ export class AudioManager {
         return track.encoded ?? track.info.identifier ?? track.info.uri ?? track.info.title;
     }
 
-    private shuffleTracks<T>(tracks: T[]) {
-        const shuffled = [...tracks];
-        for (let index = shuffled.length - 1; index > 0; index--) {
-            const randomIndex = Math.floor(Math.random() * (index + 1));
-            [shuffled[index], shuffled[randomIndex]] = [shuffled[randomIndex], shuffled[index]];
-        }
-        return shuffled;
-    }
-
-    private isTimeoutError(error: unknown) {
-        const typed = error as { name?: string; message?: string };
-        const message = typed?.message?.toLowerCase() ?? "";
-        return typed?.name === "TimeoutError"
-            || message.includes("operation was aborted due to timeout")
-            || message.includes("timeout");
-    }
-
-    private async playWithRetry(player: Player, guildId: string, context: string) {
-        for (let attempt = 0; attempt <= LAVALINK_PLAY_RETRIES; attempt++) {
-            try {
-                await player.play();
-                return;
-            } catch (error) {
-                if (!this.isTimeoutError(error)) throw error;
-
-                console.warn(`[Audio] Lavalink play timeout for guild ${guildId} (${context}), attempt ${attempt + 1}/${LAVALINK_PLAY_RETRIES + 1}.`);
-                if (attempt >= LAVALINK_PLAY_RETRIES) throw new Error("LAVALINK_TIMEOUT");
-
-                await this.sleep(LAVALINK_PLAY_RETRY_DELAY_MS);
-                const currentPlayer = this.lavalink.getPlayer(guildId);
-                if (currentPlayer?.playing) return;
-            }
-        }
-    }
-
     private async rollbackFailedPlayback(guildId: string, player: Player) {
         await player.stopPlaying(true).catch(() => null);
         await this.repository.markStoppedKeepQueue(guildId).catch(() => null);
-    }
-
-    private sleep(ms: number) {
-        return new Promise<void>(resolve => {
-            const timer = setTimeout(resolve, ms);
-            timer.unref?.();
-        });
     }
 
     private async resolvePlaylistTracks(player: Player, tracks: PlaylistTrackConfig[], requestedBy: string) {

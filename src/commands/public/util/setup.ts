@@ -16,9 +16,11 @@ import { CommandBuilder } from "../../../config/CommandBuilder.js";
 import { requireComponentReplyPermissions, requireTextReplyPermissions } from "../../../config/CommandPermissionGuards.js";
 import { NookBuilder } from "../../../config/NookBuilder.js";
 import { privateVoiceManager } from "../../../config/PrivateVoiceManager.js";
+import { SetupValidator } from "../../../services/setup/SetupValidator.js";
 
 const SETUP_PREFIX = "nook_setup";
 const PLACEHOLDER_CHANNEL_ID = "000000000";
+const setupValidator = new SetupValidator(SETUP_PREFIX);
 
 type SetupLanguage = "fr" | "en" | "es" | "de";
 type SetupSection = "menu" | "configuration" | "timing";
@@ -232,17 +234,16 @@ function cid(action: SetupAction, guildId: string, section: SetupSection) {
 }
 
 function parseId(raw: string) {
-    const [prefix, action, guildId, section] = raw.split(":");
-    if (prefix !== SETUP_PREFIX || !action || !guildId) return null;
-    return { action: action as SetupAction, guildId, section: parseSection(section) };
+    const parsed = setupValidator.parseCustomId(raw);
+    return parsed ? { ...parsed, action: parsed.action as SetupAction } : null;
 }
 
 function parseLanguage(language: string | null | undefined): SetupLanguage {
-    return language === "en" || language === "es" || language === "de" || language === "fr" ? language : "fr";
+    return setupValidator.parseLanguage(language);
 }
 
 function parseSection(section: string | null | undefined): SetupSection {
-    return section === "configuration" || section === "timing" || section === "menu" ? section : "menu";
+    return setupValidator.parseSection(section);
 }
 
 function channelLabel(id: string | null | undefined, t: Copy) {

@@ -1,5 +1,6 @@
 import { privateVoiceManager } from "../../config/PrivateVoiceManager.js";
 import { audioCommandCopies, defaultAudioCommandCopy } from "./types.js";
+import { getAudioUserErrorMessage } from "./AudioErrorMapper.js";
 import type { AudioCommandCopy, BotLanguage } from "./types.js";
 
 export { defaultAudioCommandCopy } from "./types.js";
@@ -27,10 +28,5 @@ export async function getAudioCommandCopy(guildId: string): Promise<AudioCommand
 }
 
 export function getPlayErrorMessage(copy: AudioCommandCopy, error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message === "LAVALINK_NOT_READY") return copy.errors.lavalinkNotReady;
-    if (message === "LAVALINK_TIMEOUT") return copy.errors.lavalinkTimeout;
-    if (message === "TRACK_NOT_FOUND") return copy.errors.trackNotFound;
-    if (message === "QUEUE_LIMIT_REACHED") return copy.errors.queueLimit;
-    return copy.errors.genericPlay;
+    return getAudioUserErrorMessage(copy, error);
 }

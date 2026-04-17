@@ -15,6 +15,7 @@ import { requireComponentReplyPermissions, requireTextReplyPermissions } from ".
 import { NookBuilder } from "../../../config/NookBuilder.js";
 import type App from "../../../config/App.js";
 import { buildTrackNoticePanel } from "../../../services/audio/audioPanel.js";
+import { isQueueLimitError } from "../../../services/audio/AudioErrorMapper.js";
 import { defaultAudioCommandCopy, getAudioCommandCopy, getPlayErrorMessage } from "../../../services/audio/audioCommandCache.js";
 import { formatDuration, getAudioQueueAvailableSlots, type AudioCommandCopy, type StoredTrack } from "../../../services/audio/types.js";
 import type { AudioPlaylistConfig, PlaylistTrackConfig } from "../../../services/audio/playlists.js";
@@ -263,7 +264,7 @@ export async function handleImportedPlaylistSelect(interaction: StringSelectMenu
         importedPlaylists.delete(parsed.importId);
         await interaction.editReply({ components: [buildNoticePanel(message)], flags: MessageFlags.IsComponentsV2 });
     } catch (error) {
-        const errorMessage = error instanceof Error && error.message === "QUEUE_LIMIT_REACHED"
+        const errorMessage = isQueueLimitError(error)
             ? copy.playlist.fullQueue
             : getPlayErrorMessage(copy, error) || copy.playlist.addFailed;
         await interaction.editReply({

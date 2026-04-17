@@ -1,6 +1,7 @@
 import { Prisma, type Track as DbTrack } from "@prisma/client";
-import { prisma } from "../../config/Prisma.js";
-import { getAudioQueueAvailableSlots, MAX_AUDIO_QUEUE_SIZE, StoredTrack } from "./types.js";
+import { prisma } from "../config/Prisma.js";
+import { QueueLimitReachedError } from "../domain/errors/index.js";
+import { getAudioQueueAvailableSlots, MAX_AUDIO_QUEUE_SIZE, type StoredTrack } from "../types/audio.js";
 
 const audioStateInclude = {
     currentTrack: true,
@@ -156,7 +157,7 @@ export class AudioStateRepository {
 
     async enqueue(guildId: string, track: StoredTrack) {
         const state = await this.getOrCreate(guildId);
-        if (getAudioQueueAvailableSlots(state) <= 0) throw new Error("QUEUE_LIMIT_REACHED");
+        if (getAudioQueueAvailableSlots(state) <= 0) throw new QueueLimitReachedError();
 
         const maxPosition = await prisma.track.aggregate({
             where: { queuedInId: state.id },

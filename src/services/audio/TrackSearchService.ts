@@ -1,4 +1,5 @@
 import type { LavalinkManager, SearchPlatform, Track } from "lavalink-client";
+import { env } from "../../config/env.js";
 import { formatDuration, StoredTrack, TrackSearchChoice, trackToStored } from "./types.js";
 import type { AudioPlaylistConfig, PlaylistTrackConfig } from "./playlists.js";
 import { similarity } from "./levenshtein.js";
@@ -296,8 +297,8 @@ export class TrackSearchService {
         const cached = this.spotifyTokenCache;
         if (cached && cached.expiresAt > Date.now()) return cached.accessToken;
 
-        const clientId = process.env.SPOTIFY_CLIENT_ID?.trim();
-        const clientSecret = process.env.SPOTIFY_CLIENT_SECRET?.trim();
+        const clientId = env.spotify.clientId;
+        const clientSecret = env.spotify.clientSecret;
         if (!clientId || !clientSecret) {
             this.spotifyApiUnavailable = true;
             return null;
@@ -590,7 +591,7 @@ export class TrackSearchService {
             : `${base}/${pathOrUrl.replace(/^\/+/g, "")}`;
         const url = new URL(rawUrl);
         const token = includeToken && !this.deezerAccessTokenInvalid
-            ? process.env.DEEZER_ACCESS_TOKEN?.trim()
+            ? env.deezer.accessToken
             : "";
         if (token && !url.searchParams.has("access_token")) {
             url.searchParams.set("access_token", token);
@@ -599,7 +600,7 @@ export class TrackSearchService {
     }
 
     private hasDeezerAccessToken() {
-        return Boolean(process.env.DEEZER_ACCESS_TOKEN?.trim());
+        return Boolean(env.deezer.accessToken);
     }
 
     private isInvalidDeezerAccessTokenError(error: DeezerApiError) {

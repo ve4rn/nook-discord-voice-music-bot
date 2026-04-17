@@ -9,6 +9,7 @@ import { CommandBuilder } from "../../../config/CommandBuilder.js";
 import { requireComponentReplyPermissions, requireTextReplyPermissions } from "../../../config/CommandPermissionGuards.js";
 import { NookBuilder } from "../../../config/NookBuilder.js";
 import type App from "../../../config/App.js";
+import { isQueueLimitError } from "../../../services/audio/AudioErrorMapper.js";
 import { defaultAudioCommandCopy, getAudioCommandCopy, getPlayErrorMessage } from "../../../services/audio/audioCommandCache.js";
 import { formatDuration, getAudioQueueAvailableSlots, type AudioCommandCopy } from "../../../services/audio/types.js";
 import { getAudioPlaylist, searchAudioPlaylists, type AudioPlaylistConfig, type PlaylistTrackConfig } from "../../../services/audio/playlists.js";
@@ -155,7 +156,7 @@ export async function handlePlaylistSelect(interaction: StringSelectMenuInteract
             : copy.playlist.partiallyAdded(result.added.length, tracks.length);
         await interaction.editReply({ components: [buildNoticePanel(message)], flags: MessageFlags.IsComponentsV2 });
     } catch (error) {
-        const errorMessage = error instanceof Error && error.message === "QUEUE_LIMIT_REACHED"
+        const errorMessage = isQueueLimitError(error)
             ? copy.playlist.fullQueue
             : getPlayErrorMessage(copy, error) || copy.playlist.addFailed;
         await interaction.editReply({

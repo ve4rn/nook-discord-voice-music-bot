@@ -1,5 +1,6 @@
 import { ButtonBuilder, ButtonStyle, MessageFlags, PermissionFlagsBits, SeparatorSpacingSize } from "discord.js";
 import { CommandBuilder } from "../../../config/CommandBuilder.js";
+import { env } from "../../../config/env.js";
 import { requireComponentReplyPermissions, requireTextReplyPermissions } from "../../../config/CommandPermissionGuards.js";
 import { NookBuilder } from "../../../config/NookBuilder.js";
 import { privateVoiceManager } from "../../../config/PrivateVoiceManager.js";
@@ -116,15 +117,11 @@ function getInviteUrl(clientId: string) {
 }
 
 function getRepositoryUrl() {
-    return process.env.GITHUB_REPOSITORY_URL?.trim()
-        || process.env.REPOSITORY_URL?.trim()
-        || DEFAULT_REPOSITORY_URL;
+    return env.links.repositoryUrl ?? DEFAULT_REPOSITORY_URL;
 }
 
 function getSupportServerUrl() {
-    return process.env.SUPPORT_SERVER_URL?.trim()
-        || process.env.DISCORD_SERVER_URL?.trim()
-        || DEFAULT_SUPPORT_SERVER_URL;
+    return env.links.supportServerUrl ?? DEFAULT_SUPPORT_SERVER_URL;
 }
 
 function formatCommandMention(command: Command, commandIds: Map<string, string>) {

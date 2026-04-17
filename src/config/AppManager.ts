@@ -6,12 +6,11 @@ import ConsoleMessage from "./ConsoleMessage.js";
 import { Command, Event } from "./main.js";
 import path from 'path';
 import { buildCommand, cleanText } from '../utils/main.js'
-import dotenv from 'dotenv';
 import { AudioManager } from "../services/audio/AudioManager.js";
 import { privateVoiceManager } from "./PrivateVoiceManager.js";
-import { prismaHealthcheck } from "./Prisma.js";
+import { DatabaseHealthRepository } from "../repositories/DatabaseHealthRepository.js";
+import { env } from "./env.js";
 
-dotenv.config();
 type Cooldown = {
     endAt: number;
     timer: NodeJS.Timeout | null;
@@ -35,6 +34,7 @@ export default class AppManager {
     privateSlashCommands: RESTPostAPIChatInputApplicationCommandsJSONBody[];
     cooldown: Map<string, Cooldown>;
     private readonly scope = "AppManager";
+    private readonly databaseHealthRepository = new DatabaseHealthRepository();
     private readonly bootStats: BootStats = {
         commandsPrivate: 0,
         commandsPublic: 0,
@@ -46,7 +46,7 @@ export default class AppManager {
         this.clientId = clientId;
         this.guildId = guildId?.trim() || null;
         this.app = app;
-        this.token = process.env.TOKEN as string;
+        this.token = env.discord.token;
         this.publicSlashCommands = [];
         this.privateSlashCommands = [];
         this.cooldown = new Map<string, Cooldown>();
@@ -149,7 +149,6 @@ export default class AppManager {
             const timer = setTimeout(() => {
                 this.cooldown.delete(cooldownCode);
             }, cooldownMs);
-            // @ts-ignore
             timer.unref?.();
 
             this.cooldown.set(cooldownCode, { endAt, timer });
@@ -217,7 +216,7 @@ export default class AppManager {
                         command.category = dir;
                         this.app.commands.set(command.options.name, command);
 
-                        const { type, ...cleanOptions } = command.options;
+                        const { type: _categoryType, ...cleanOptions } = command.options;
                         const cmd = await buildCommand(cleanOptions);
                         if (folder === "public") this.publicSlashCommands.push(cmd);
                         else this.privateSlashCommands.push(cmd);
@@ -271,14 +270,26 @@ export default class AppManager {
         }
         ConsoleMessage.success(`Bound ${loadedEvents} events.`, "Events");
     }
-    private async verifyEnvironment(): Promise<any> {
-        const token = process.env.TOKEN;
+    private async verifyEnvironment(): Promise<void> {
+        const token = env.discord.token;
         ConsoleMessage.info("Validating environment variables.", "Env");
-        if (!token) return ConsoleMessage.error("'TOKEN' environment variable is missing.", "Env");
-        if (!await this.isValidToken(token)) return ConsoleMessage.error("'TOKEN' environment variable is invalid.", "Env");
+        if (!token) {
+            ConsoleMessage.error("'TOKEN' environment variable is missing.", "Env");
+            return;
+        }
+        if (!await this.isValidToken(token)) {
+            ConsoleMessage.error("'TOKEN' environment variable is invalid.", "Env");
+            return;
+        }
         this.token = token;
-        if (!this.clientId) return ConsoleMessage.error("Client ID is missing.", "Env");
-        if (!await this.isValidClient(this.clientId)) return ConsoleMessage.error("Invalid client ID.", "Env");
+        if (!this.clientId) {
+            ConsoleMessage.error("Client ID is missing.", "Env");
+            return;
+        }
+        if (!await this.isValidClient(this.clientId)) {
+            ConsoleMessage.error("Invalid client ID.", "Env");
+            return;
+        }
         if (!this.guildId) {
             ConsoleMessage.warn("GUILD_ID is not configured. Startup guild bootstrap will be skipped.", "Env");
         }
@@ -292,7 +303,7 @@ export default class AppManager {
                 },
             });
             return response.ok;
-        } catch (error) {
+        } catch {
             return false;
         }
     }
@@ -300,7 +311,7 @@ export default class AppManager {
         try {
             const response = await fetch(`https://discord.com/api/v10/oauth2/applications/${id}/rpc`);
             return response.ok;
-        } catch (error) {
+        } catch {
             return false;
         }
     }
@@ -371,7 +382,7 @@ export default class AppManager {
     private async printBootStats(botTag: string, guildName: string) {
         const memory = process.memoryUsage();
         const apiLatency = await this.measureDiscordApiLatency();
-        const prismaHealthy = await prismaHealthcheck();
+        const prismaHealthy = await this.measureDatabaseHealth();
         const uptimeMs = Date.now() - this.bootStats.startedAt;
 
         ConsoleMessage.info("Boot statistics", "Stats");
@@ -390,6 +401,14 @@ export default class AppManager {
             { Metric: "Node", Value: process.version },
             { Metric: "Boot time", Value: `${uptimeMs} ms` },
         ]);
+    }
+
+    private async measureDatabaseHealth(timeoutMs = 1500): Promise<boolean> {
+        const timeout = new Promise<boolean>(resolve => {
+            const timer = setTimeout(() => resolve(false), timeoutMs);
+            timer.unref?.();
+        });
+        return Promise.race([this.databaseHealthRepository.isHealthy(), timeout]);
     }
 
     private async registerCommands(privateGuildId: string | null): Promise<void> {
