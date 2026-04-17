@@ -192,7 +192,7 @@ export default class AppManager {
         ]);
 
         for (const folder of commandsFolder) {
-            const commandPath = path.resolve(process.cwd(), `./src/commands/${folder}`);
+            const commandPath = path.resolve(process.cwd(), `./dist/commands/${folder}`);
             if (!fs.existsSync(commandPath)) {
                 ConsoleMessage.warn(`Commands folder does not exist: ${commandPath}`, "Commands");
                 continue;
@@ -238,7 +238,7 @@ export default class AppManager {
         );
     }
     public async loadEvents(): Promise<void> {
-        const eventPath = path.resolve(process.cwd(), './src/events');
+        const eventPath = path.resolve(process.cwd(), './dist/events');
         if (!fs.existsSync(eventPath)) {
             ConsoleMessage.warn(`Events folder does not exist: ${eventPath}`, "Events");
             return;

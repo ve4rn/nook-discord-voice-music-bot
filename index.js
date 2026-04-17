@@ -1,4 +1,4 @@
-import { App, AppManager, Intents } from './src/main.js';
+import { App, AppManager, Intents } from './dist/main.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
