@@ -109,6 +109,12 @@ Optional Deezer API variables for `/play` playlist imports:
 DEEZER_ACCESS_TOKEN=your_deezer_access_token
 ```
 
+Optional support server URL for the `/help` button:
+
+```env
+SUPPORT_SERVER_URL=https://discord.gg/your_invite
+```
+
 Generate Prisma and apply migrations:
 
 ```bash

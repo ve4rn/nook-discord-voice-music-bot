@@ -5,7 +5,8 @@ import { NookBuilder } from "../../../config/NookBuilder.js";
 import { privateVoiceManager } from "../../../config/PrivateVoiceManager.js";
 import type { Command } from "../../../config/main.js";
 
-const DEFAULT_REPOSITORY_URL = "https://github.com/azrogdev/Emporio";
+const DEFAULT_REPOSITORY_URL = "https://github.com/ve4rn/nook-discord-voice-music-bot";
+const DEFAULT_SUPPORT_SERVER_URL = "https://discord.gg/mf6993bmQ8";
 const CATEGORY_ORDER = ["Music", "Misc"];
 
 type HelpLanguage = "fr" | "en" | "es" | "de";
@@ -15,6 +16,7 @@ type HelpCopy = {
     emptyCategory: string;
     addBot: string;
     repository: string;
+    supportServer: string;
     categories: Record<string, string>;
 };
 
@@ -24,6 +26,7 @@ const helpCopies: Record<HelpLanguage, HelpCopy> = {
         emptyCategory: "Aucune commande.",
         addBot: "Ajouter Nook",
         repository: "GitHub",
+        supportServer: "Serveur support",
         categories: {
             music: "Musique",
             util: "Divers",
@@ -34,6 +37,7 @@ const helpCopies: Record<HelpLanguage, HelpCopy> = {
         emptyCategory: "No command.",
         addBot: "Add Nook",
         repository: "GitHub",
+        supportServer: "Support Server",
         categories: {
             music: "Music",
             util: "Misc",
@@ -44,6 +48,7 @@ const helpCopies: Record<HelpLanguage, HelpCopy> = {
         emptyCategory: "No hay comandos.",
         addBot: "Anadir Nook",
         repository: "GitHub",
+        supportServer: "Servidor de soporte",
         categories: {
             music: "Musica",
             util: "Varios",
@@ -54,6 +59,7 @@ const helpCopies: Record<HelpLanguage, HelpCopy> = {
         emptyCategory: "Keine Befehle.",
         addBot: "Nook hinzufuegen",
         repository: "GitHub",
+        supportServer: "Support-Server",
         categories: {
             music: "Musik",
             util: "Sonstiges",
@@ -113,6 +119,12 @@ function getRepositoryUrl() {
     return process.env.GITHUB_REPOSITORY_URL?.trim()
         || process.env.REPOSITORY_URL?.trim()
         || DEFAULT_REPOSITORY_URL;
+}
+
+function getSupportServerUrl() {
+    return process.env.SUPPORT_SERVER_URL?.trim()
+        || process.env.DISCORD_SERVER_URL?.trim()
+        || DEFAULT_SUPPORT_SERVER_URL;
 }
 
 function formatCommandMention(command: Command, commandIds: Map<string, string>) {
@@ -189,6 +201,10 @@ export default CommandBuilder({
                 .setLabel(copy.repository)
                 .setStyle(ButtonStyle.Link)
                 .setURL(getRepositoryUrl()),
+            new ButtonBuilder()
+                .setLabel(copy.supportServer)
+                .setStyle(ButtonStyle.Link)
+                .setURL(getSupportServerUrl()),
         ),
     );
 
