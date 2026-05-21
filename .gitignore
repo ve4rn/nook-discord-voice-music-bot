@@ -2,6 +2,7 @@ node_modules/
 dist/
 
 .env
+test.md
 
 prisma/migrations/
 
@@ -9,3 +10,4 @@ lavalink/Lavalink.jar
 lavalink/logs/
 lavalink/plugins/
 *.log
+assets/

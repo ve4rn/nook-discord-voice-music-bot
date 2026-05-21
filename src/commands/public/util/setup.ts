@@ -14,6 +14,7 @@ import {
 } from "discord.js";
 import { CommandBuilder } from "../../../config/CommandBuilder.js";
 import { requireComponentReplyPermissions, requireTextReplyPermissions } from "../../../config/CommandPermissionGuards.js";
+import { getGuildMessages, getLanguageDisplayName, getMessages, type MessageTree } from "../../../config/i18n.js";
 import { NookBuilder } from "../../../config/NookBuilder.js";
 import { privateVoiceManager } from "../../../config/PrivateVoiceManager.js";
 import { SetupValidator } from "../../../services/setup/SetupValidator.js";
@@ -28,206 +29,9 @@ type SetupAction = "section" | "toggle" | "language" | "voice_category" | "creat
 type SetupInteraction = ButtonInteraction | StringSelectMenuInteraction | ChannelSelectMenuInteraction;
 type GuildVoiceConfig = Awaited<ReturnType<typeof privateVoiceManager.getOrCreateGuildConfig>>;
 
-type Copy = {
-    title: string;
-    intro: string;
-    cats: string;
-    current: string;
-    notConfigured: string;
-    sectionPlaceholder: string;
-    menu: string;
-    menuDesc: string;
-    configuration: string;
-    configurationDesc: string;
-    timing: string;
-    timingDesc: string;
-    moduleTitle: string;
-    active: string;
-    inactive: string;
-    enable: string;
-    disable: string;
-    enableFirst: string;
-    languageTitle: string;
-    languageDesc: string;
-    languagePlaceholder: string;
-    categoryTitle: string;
-    categoryDesc: string;
-    categoryPlaceholder: string;
-    voiceTitle: string;
-    voiceDesc: string;
-    voicePlaceholder: string;
-    panelTitle: string;
-    panelDesc: string;
-    panelPlaceholder: string;
-    pingPlaceholder: string;
-    cleanupPlaceholder: string;
-    serverOnly: string;
-    mismatch: string;
-    adminOnly: string;
-    invalid: string;
-};
+type Copy = MessageTree["setup"];
 
-const languageOptions: Array<{ label: string; value: SetupLanguage }> = [
-    { label: "Francais", value: "fr" },
-    { label: "English", value: "en" },
-    { label: "Espanol", value: "es" },
-    { label: "Deutsch", value: "de" },
-];
-
-const copy: Record<SetupLanguage, Copy> = {
-    fr: {
-        title: "Configuration Nook",
-        intro: "Configurez les vocaux prives de ce serveur.",
-        cats: "**Menu** gere l'activation du module.\n**Configuration** regroupe la langue, la categorie, le salon createur et le panneau proprietaire.\n**Delais** regroupe le ping proprietaire et le nettoyage des salons vides.",
-        current: "Actuellement",
-        notConfigured: "non configure",
-        sectionPlaceholder: "Categorie du setup",
-        menu: "Menu",
-        menuDesc: "Activation du module",
-        configuration: "Configuration",
-        configurationDesc: "Parametres de base",
-        timing: "Delais",
-        timingDesc: "Ping et cleanup",
-        moduleTitle: "Module vocaux prives",
-        active: "Le module est actif.",
-        inactive: "Le module est inactif.",
-        enable: "Activer",
-        disable: "Desactiver",
-        enableFirst: "Vous devez activer le module pour changer les parametres.",
-        languageTitle: "Langue",
-        languageDesc: "Definit la langue utilisee par les panneaux des vocaux prives.",
-        languagePlaceholder: "Langue",
-        categoryTitle: "Categorie",
-        categoryDesc: "Les salons vocaux prives seront crees dans cette categorie.",
-        categoryPlaceholder: "Categorie",
-        voiceTitle: "Salon createur",
-        voiceDesc: "Quand un membre rejoint ce vocal, Nook cree son salon prive.",
-        voicePlaceholder: "Salon createur",
-        panelTitle: "Panneau proprietaire",
-        panelDesc: "Reglez combien de membres le proprietaire peut selectionner en une seule fois dans le panneau de son salon.",
-        panelPlaceholder: "Selection simultanee",
-        pingPlaceholder: "Ping proprietaire",
-        cleanupPlaceholder: "Cleanup salons vides",
-        serverOnly: "Cette commande doit etre utilisee dans un serveur.",
-        mismatch: "Ce panneau ne correspond pas a ce serveur.",
-        adminOnly: "Seuls les administrateurs peuvent modifier ce setup.",
-        invalid: "Parametre invalide.",
-    },
-    en: {
-        title: "Nook Setup",
-        intro: "Configure this server's private voice channels.",
-        cats: "**Menu** controls module activation.\n**Configuration** groups language, category, creator channel and owner panel settings.\n**Delays** groups owner ping and empty channel cleanup.",
-        current: "Current",
-        notConfigured: "not configured",
-        sectionPlaceholder: "Setup category",
-        menu: "Menu",
-        menuDesc: "Module activation",
-        configuration: "Configuration",
-        configurationDesc: "Base settings",
-        timing: "Delays",
-        timingDesc: "Ping and cleanup",
-        moduleTitle: "Private voice module",
-        active: "The module is active.",
-        inactive: "The module is inactive.",
-        enable: "Enable",
-        disable: "Disable",
-        enableFirst: "You must enable the module before changing settings.",
-        languageTitle: "Language",
-        languageDesc: "Sets the language used by private voice channel panels.",
-        languagePlaceholder: "Language",
-        categoryTitle: "Category",
-        categoryDesc: "Private voice channels will be created inside this category.",
-        categoryPlaceholder: "Category",
-        voiceTitle: "Creator channel",
-        voiceDesc: "When a member joins this voice channel, Nook creates their private room.",
-        voicePlaceholder: "Creator channel",
-        panelTitle: "Owner panel",
-        panelDesc: "Set how many members the owner can select at once from their room panel.",
-        panelPlaceholder: "Simultaneous select",
-        pingPlaceholder: "Owner ping",
-        cleanupPlaceholder: "Empty cleanup",
-        serverOnly: "This command must be used in a server.",
-        mismatch: "This panel does not belong to this server.",
-        adminOnly: "Only administrators can edit this setup.",
-        invalid: "Invalid setting.",
-    },
-    es: {
-        title: "Configuracion de Nook",
-        intro: "Configura los canales de voz privados de este servidor.",
-        cats: "**Menu** controla la activacion del modulo.\n**Configuracion** agrupa idioma, categoria, canal creador y panel del propietario.\n**Tiempos** agrupa el ping al propietario y la limpieza de canales vacios.",
-        current: "Actual",
-        notConfigured: "sin configurar",
-        sectionPlaceholder: "Categoria del setup",
-        menu: "Menu",
-        menuDesc: "Activacion del modulo",
-        configuration: "Configuracion",
-        configurationDesc: "Parametros base",
-        timing: "Tiempos",
-        timingDesc: "Ping y limpieza",
-        moduleTitle: "Modulo de voz privada",
-        active: "El modulo esta activo.",
-        inactive: "El modulo esta inactivo.",
-        enable: "Activar",
-        disable: "Desactivar",
-        enableFirst: "Debes activar el modulo para cambiar los parametros.",
-        languageTitle: "Idioma",
-        languageDesc: "Define el idioma usado por los paneles de voz privados.",
-        languagePlaceholder: "Idioma",
-        categoryTitle: "Categoria",
-        categoryDesc: "Los canales de voz privados se crearan en esta categoria.",
-        categoryPlaceholder: "Categoria",
-        voiceTitle: "Canal creador",
-        voiceDesc: "Cuando un miembro entra en este canal, Nook crea su sala privada.",
-        voicePlaceholder: "Canal creador",
-        panelTitle: "Panel del propietario",
-        panelDesc: "Define cuantos miembros puede seleccionar el propietario a la vez en el panel de su sala.",
-        panelPlaceholder: "Seleccion simultanea",
-        pingPlaceholder: "Ping propietario",
-        cleanupPlaceholder: "Limpieza vacios",
-        serverOnly: "Este comando debe usarse en un servidor.",
-        mismatch: "Este panel no corresponde a este servidor.",
-        adminOnly: "Solo los administradores pueden modificar este setup.",
-        invalid: "Parametro invalido.",
-    },
-    de: {
-        title: "Nook Einrichtung",
-        intro: "Richte die privaten Sprachkanaele dieses Servers ein.",
-        cats: "**Menu** steuert die Modulaktivierung.\n**Konfiguration** enthaelt Sprache, Kategorie, Ersteller-Kanal und Besitzer-Panel.\n**Zeiten** enthaelt Besitzer-Ping und Cleanup leerer Kanaele.",
-        current: "Aktuell",
-        notConfigured: "nicht konfiguriert",
-        sectionPlaceholder: "Setup-Kategorie",
-        menu: "Menu",
-        menuDesc: "Modulaktivierung",
-        configuration: "Konfiguration",
-        configurationDesc: "Basiseinstellungen",
-        timing: "Zeiten",
-        timingDesc: "Ping und Cleanup",
-        moduleTitle: "Privates Sprachmodul",
-        active: "Das Modul ist aktiv.",
-        inactive: "Das Modul ist inaktiv.",
-        enable: "Aktivieren",
-        disable: "Deaktivieren",
-        enableFirst: "Du musst das Modul aktivieren, bevor du Einstellungen aenderst.",
-        languageTitle: "Sprache",
-        languageDesc: "Legt die Sprache der privaten Sprachkanal-Panels fest.",
-        languagePlaceholder: "Sprache",
-        categoryTitle: "Kategorie",
-        categoryDesc: "Private Sprachkanaele werden in dieser Kategorie erstellt.",
-        categoryPlaceholder: "Kategorie",
-        voiceTitle: "Ersteller-Kanal",
-        voiceDesc: "Wenn ein Mitglied diesem Sprachkanal beitritt, erstellt Nook seinen privaten Raum.",
-        voicePlaceholder: "Ersteller-Kanal",
-        panelTitle: "Besitzer-Panel",
-        panelDesc: "Legt fest, wie viele Mitglieder der Besitzer im Panel seines Raums gleichzeitig auswaehlen kann.",
-        panelPlaceholder: "Gleichzeitige Auswahl",
-        pingPlaceholder: "Besitzer-Ping",
-        cleanupPlaceholder: "Leere Kanaele",
-        serverOnly: "Dieser Befehl muss auf einem Server genutzt werden.",
-        mismatch: "Dieses Panel gehoert nicht zu diesem Server.",
-        adminOnly: "Nur Administratoren koennen dieses Setup aendern.",
-        invalid: "Ungueltiger Parameter.",
-    },
-};
+const languageOptions: SetupLanguage[] = ["fr", "en", "es", "de"];
 
 function cid(action: SetupAction, guildId: string, section: SetupSection) {
     return `${SETUP_PREFIX}:${action}:${guildId}:${section}`;
@@ -236,10 +40,6 @@ function cid(action: SetupAction, guildId: string, section: SetupSection) {
 function parseId(raw: string) {
     const parsed = setupValidator.parseCustomId(raw);
     return parsed ? { ...parsed, action: parsed.action as SetupAction } : null;
-}
-
-function parseLanguage(language: string | null | undefined): SetupLanguage {
-    return setupValidator.parseLanguage(language);
 }
 
 function parseSection(section: string | null | undefined): SetupSection {
@@ -258,64 +58,37 @@ function ms(value: number) {
 }
 
 function languageLabel(language: string) {
-    return languageOptions.find(option => option.value === language)?.label ?? language;
+    return getLanguageDisplayName(language, language);
 }
 
 function ownerOption(t: Copy, count: number) {
-    if (t === copy.en) return `${count} member${count > 1 ? "s" : ""}`;
-    if (t === copy.es) return `${count} miembro${count > 1 ? "s" : ""}`;
-    if (t === copy.de) return `${count} Mitglied${count > 1 ? "er" : ""}`;
-    return `${count} membre${count > 1 ? "s" : ""}`;
+    return t.ownerOption.replace("{count}", String(count));
 }
 
 function ownerCurrent(t: Copy, count: number) {
-    if (t === copy.en) return `${count} member(s) at once`;
-    if (t === copy.es) return `${count} miembro(s) a la vez`;
-    if (t === copy.de) return `${count} Mitglied(er) gleichzeitig`;
-    return `${count} membre(s) a la fois`;
+    return t.ownerCurrent.replace("{count}", String(count));
 }
 
 function updateText(t: Copy, key: "enabled" | "language" | "voice_category" | "create_voice" | "access" | "ping" | "cleanup", value: string | number | boolean) {
     if (key === "enabled") {
-        if (t === copy.en) return value ? "The module is now active." : "The module is now inactive.";
-        if (t === copy.es) return value ? "El modulo esta ahora activo." : "El modulo esta ahora inactivo.";
-        if (t === copy.de) return value ? "Das Modul ist jetzt aktiv." : "Das Modul ist jetzt inaktiv.";
-        return value ? "Le module est maintenant actif." : "Le module est maintenant inactif.";
+        return value ? t.moduleEnabledUpdate : t.moduleDisabledUpdate;
     }
     if (key === "language") {
-        if (t === copy.en) return `Module language set to **${value}**.`;
-        if (t === copy.es) return `Idioma del modulo definido en **${value}**.`;
-        if (t === copy.de) return `Modulsprache auf **${value}** gesetzt.`;
-        return `Langue du module definie sur **${value}**.`;
+        return t.languageUpdated.replace("{value}", String(value));
     }
     if (key === "voice_category") {
-        if (t === copy.en) return `Private voice category set to <#${value}>.`;
-        if (t === copy.es) return `Categoria de voces privadas definida en <#${value}>.`;
-        if (t === copy.de) return `Kategorie fuer private Sprachkanaele auf <#${value}> gesetzt.`;
-        return `Categorie des vocaux prives definie sur <#${value}>.`;
+        return t.categoryUpdated.replace("{value}", String(value));
     }
     if (key === "create_voice") {
-        if (t === copy.en) return `Private voice creator channel set to <#${value}>.`;
-        if (t === copy.es) return `Canal creador de voces privadas definido en <#${value}>.`;
-        if (t === copy.de) return `Ersteller-Kanal fuer private Sprachkanaele auf <#${value}> gesetzt.`;
-        return `Salon createur des vocaux prives defini sur <#${value}>.`;
+        return t.creatorChannelUpdated.replace("{value}", String(value));
     }
     if (key === "access") {
-        if (t === copy.en) return `The owner panel now allows **${value}** member(s) to be selected at once.`;
-        if (t === copy.es) return `El panel del propietario ahora permite seleccionar **${value}** miembro(s) a la vez.`;
-        if (t === copy.de) return `Das Besitzer-Panel erlaubt jetzt **${value}** Mitglied(er) gleichzeitig.`;
-        return `Le panneau proprietaire permet maintenant de selectionner **${value}** membre(s) a la fois.`;
+        return t.ownerPanelUpdated.replace("{value}", String(value));
     }
     if (key === "ping") {
-        if (t === copy.en) return `The owner ping will stay visible for **${value}**.`;
-        if (t === copy.es) return `El ping al propietario permanecera visible **${value}**.`;
-        if (t === copy.de) return `Der Besitzer-Ping bleibt **${value}** sichtbar.`;
-        return `Le ping proprietaire restera visible **${value}**.`;
+        return t.pingUpdated.replace("{value}", String(value));
     }
-    if (t === copy.en) return `Empty channel cleanup is now **${value}**.`;
-    if (t === copy.es) return `La limpieza de canales vacios pasa a **${value}**.`;
-    if (t === copy.de) return `Cleanup leerer Kanaele ist jetzt **${value}**.`;
-    return `Le cleanup des salons vides passe a **${value}**.`;
+    return t.cleanupUpdated.replace("{value}", String(value));
 }
 
 async function adminMember(interaction: SetupInteraction) {
@@ -331,8 +104,7 @@ async function canManage(interaction: SetupInteraction) {
 }
 
 async function getCopy(guildId: string) {
-    const config = await privateVoiceManager.getOrCreateGuildConfig(guildId);
-    return copy[parseLanguage(config.lang)];
+    return (await getGuildMessages(guildId)).setup;
 }
 
 function sectionSelect(guild: Guild, section: SetupSection, t: Copy) {
@@ -360,7 +132,11 @@ function languageSelect(guild: Guild, config: GuildVoiceConfig, section: SetupSe
         .setPlaceholder(t.languagePlaceholder)
         .setMinValues(1)
         .setMaxValues(1)
-        .addOptions(languageOptions.map(option => ({ ...option, default: option.value === config.lang })));
+        .addOptions(languageOptions.map(option => ({
+            label: getLanguageDisplayName(option, config.lang),
+            value: option,
+            default: option === config.lang,
+        })));
 }
 
 function categorySelect(guild: Guild, config: GuildVoiceConfig, section: SetupSection, t: Copy) {
@@ -400,7 +176,7 @@ function pingSelect(guild: Guild, section: SetupSection, t: Copy) {
         .setPlaceholder(t.pingPlaceholder)
         .setMinValues(1)
         .setMaxValues(1)
-        .addOptions(["3s", "10s", "30s"].map(value => ({ label: `Ping ${value}`, value: `p${value.replace("s", "")}` })));
+        .addOptions(["3s", "10s", "30s"].map(value => ({ label: `${t.pingLabel} ${value}`, value: `p${value.replace("s", "")}` })));
 }
 
 function cleanupSelect(guild: Guild, section: SetupSection, t: Copy) {
@@ -409,7 +185,7 @@ function cleanupSelect(guild: Guild, section: SetupSection, t: Copy) {
         .setPlaceholder(t.cleanupPlaceholder)
         .setMinValues(1)
         .setMaxValues(1)
-        .addOptions(["1m", "5m", "10m"].map(value => ({ label: `Cleanup ${value}`, value: `c${value.replace("m", "")}` })));
+        .addOptions(["1m", "5m", "10m"].map(value => ({ label: `${t.cleanupLabel} ${value}`, value: `c${value.replace("m", "")}` })));
 }
 
 function block(panel: NookBuilder, title: string, description: string, current: string, addMenu: (panel: NookBuilder) => NookBuilder) {
@@ -431,8 +207,7 @@ function sectionIntro(section: SetupSection, t: Copy) {
 }
 
 function moduleStateLine(config: GuildVoiceConfig, t: Copy) {
-    const state = config.enabled ? t.active : t.inactive;
-    return state.replace(/^Le module est /, "").replace(/^The module is /, "").replace(/^El modulo esta /, "").replace(/^Das Modul ist /, "");
+    return config.enabled ? t.active : t.inactive;
 }
 
 function shell(guild: Guild, config: GuildVoiceConfig, section: SetupSection, t: Copy) {
@@ -509,7 +284,7 @@ function appendSectionNavigation(panel: NookBuilder, guild: Guild, config: Guild
 
 async function setupComponents(guild: Guild, section: SetupSection = "menu") {
     const config = await privateVoiceManager.getOrCreateGuildConfig(guild.id);
-    const t = copy[parseLanguage(config.lang)];
+    const t = (await getGuildMessages(guild.id)).setup;
     const panel = shell(guild, config, section, t);
 
     if (!config.enabled && section !== "menu") {
@@ -532,7 +307,7 @@ async function setupComponents(guild: Guild, section: SetupSection = "menu") {
 
 async function updatePanel(interaction: SetupInteraction, section: SetupSection, content: string) {
     if (!interaction.guild) {
-        await interaction.reply({ content: copy.fr.serverOnly, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: getMessages("en").setup.serverOnly, flags: MessageFlags.Ephemeral });
         return;
     }
     if (!await requireTextReplyPermissions(interaction)) return;
@@ -568,7 +343,7 @@ async function applySetting(guildId: string, value: string, t: Copy) {
 export async function handleSetupButton(interaction: ButtonInteraction) {
     const parsed = parseId(interaction.customId);
     if (!parsed || parsed.action !== "toggle") return false;
-    const t = interaction.guild ? await getCopy(interaction.guild.id) : copy.fr;
+    const t = interaction.guild ? await getCopy(interaction.guild.id) : getMessages("en").setup;
     if (!interaction.guild || interaction.guild.id !== parsed.guildId) {
         await interaction.reply({ content: t.mismatch, flags: MessageFlags.Ephemeral });
         return true;
@@ -589,7 +364,7 @@ export async function handleSetupButton(interaction: ButtonInteraction) {
 export async function handleSetupStringSelect(interaction: StringSelectMenuInteraction) {
     const parsed = parseId(interaction.customId);
     if (!parsed || !["section", "language", "access", "ping", "cleanup"].includes(parsed.action)) return false;
-    const t = interaction.guild ? await getCopy(interaction.guild.id) : copy.fr;
+    const t = interaction.guild ? await getCopy(interaction.guild.id) : getMessages("en").setup;
     if (!interaction.guild || interaction.guild.id !== parsed.guildId) {
         await interaction.reply({ content: t.mismatch, flags: MessageFlags.Ephemeral });
         return true;
@@ -611,9 +386,9 @@ export async function handleSetupStringSelect(interaction: StringSelectMenuInter
         return true;
     }
     if (parsed.action === "language") {
-        const language = languageOptions.some(option => option.value === value) ? value as SetupLanguage : "fr";
+        const language = languageOptions.includes(value as SetupLanguage) ? value as SetupLanguage : "fr";
         await privateVoiceManager.updateGuildConfig(interaction.guild.id, { lang: language });
-        const nextCopy = copy[language];
+        const nextCopy = getMessages(language).setup;
         await updatePanel(interaction, parsed.section, updateText(nextCopy, "language", languageLabel(language)));
         return true;
     }
@@ -625,7 +400,7 @@ export async function handleSetupStringSelect(interaction: StringSelectMenuInter
 export async function handleSetupChannelSelect(interaction: ChannelSelectMenuInteraction) {
     const parsed = parseId(interaction.customId);
     if (!parsed || !["voice_category", "create_voice"].includes(parsed.action)) return false;
-    const t = interaction.guild ? await getCopy(interaction.guild.id) : copy.fr;
+    const t = interaction.guild ? await getCopy(interaction.guild.id) : getMessages("en").setup;
     if (!interaction.guild || interaction.guild.id !== parsed.guildId) {
         await interaction.reply({ content: t.mismatch, flags: MessageFlags.Ephemeral });
         return true;
@@ -664,7 +439,7 @@ export default CommandBuilder({
     cooldown: 5,
 }, async (interaction) => {
     if (!interaction.guild) {
-        return interaction.reply({ content: copy.fr.serverOnly, flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: getMessages("en").setup.serverOnly, flags: MessageFlags.Ephemeral });
     }
     if (!await requireTextReplyPermissions(interaction)) return;
 

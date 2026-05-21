@@ -11,13 +11,14 @@ import {
     type ChatInputCommandInteraction,
 } from "discord.js";
 import { CommandBuilder } from "../../../config/CommandBuilder.js";
+import { NO_PING_ALLOWED_MENTIONS } from "../../../config/DiscordMentions.js";
 import { requireComponentReplyPermissions, requireTextReplyPermissions } from "../../../config/CommandPermissionGuards.js";
 import { NookBuilder } from "../../../config/NookBuilder.js";
 import type App from "../../../config/App.js";
-import { buildTrackNoticePanel } from "../../../services/audio/audioPanel.js";
+import { buildNeutralNoticePanel, buildTrackNoticePanel } from "../../../services/audio/audioPanel.js";
 import { isQueueLimitError } from "../../../services/audio/AudioErrorMapper.js";
-import { defaultAudioCommandCopy, getAudioCommandCopy, getPlayErrorMessage } from "../../../services/audio/audioCommandCache.js";
-import { formatDuration, getAudioQueueAvailableSlots, type AudioCommandCopy, type StoredTrack } from "../../../services/audio/types.js";
+import { defaultAudioCommandCopy, getAudioCommandCopy, getPlayErrorMessage, type AudioCommandCopy } from "../../../services/audio/audioCommandCache.js";
+import { formatDuration, getAudioQueueAvailableSlots, type StoredTrack } from "../../../services/audio/types.js";
 import type { AudioPlaylistConfig, PlaylistTrackConfig } from "../../../services/audio/playlists.js";
 import { requirePlayableVoice } from "../../../services/audio/voiceGuards.js";
 
@@ -26,7 +27,6 @@ const IMPORT_PAGE_PREFIX = "play:import_page";
 const IMPORT_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_MENU_OPTIONS = 25;
 const IMPORT_TRACK_LIMIT = 100;
-const SPOTIFY_PLAYLIST_UNAVAILABLE_MESSAGE = "Spotify playlist imports are not available right now due to API issues. Please use a YouTube, SoundCloud, or Deezer playlist URL.";
 
 type ImportedPlaylistCacheEntry = {
     expiresAt: number;
@@ -89,7 +89,7 @@ function truncate(text: string, maxLength: number) {
 }
 
 function formatPlaylistTrackLabel(track: PlaylistTrackConfig, copy: AudioCommandCopy) {
-    const duration = formatDuration(track.duration, copy);
+    const duration = formatDuration(track.duration);
     const fixedLength = `${track.author} -  (${duration})`.length;
     const titleLimit = Math.max(8, 100 - fixedLength);
     const croppedTitle = truncate(track.title, titleLimit);
@@ -123,7 +123,7 @@ function buildImportedPlaylistPanel(playlist: AudioPlaylistConfig, guildId: stri
 
     const panel = new NookBuilder()
         .addTextDisplayComponents(text =>
-            text.setContent(`## ${copy.playlist.title(playlist.name)}\n${copy.playlist.description(availableSlots)}`),
+            text.setContent(`## Playlist: ${playlist.name}\nSelect the tracks to add to the queue. Available slots: **${availableSlots}**.`),
         );
 
     if (previewLines.length > 0) {
@@ -203,18 +203,18 @@ export async function handleImportedPlaylistSelect(interaction: StringSelectMenu
         : defaultAudioCommandCopy;
 
     if (!interaction.guildId || interaction.guildId !== parsed.guildId) {
-        await interaction.reply({ content: copy.playlist.guildMismatch, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ components: [await buildNeutralNoticePanel(interaction.guildId, copy.playlist.guildMismatch)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
         return true;
     }
     if (!await requireTextReplyPermissions(interaction)) return true;
 
     if (interaction.user.id !== parsed.userId) {
-        await interaction.reply({ content: copy.playlist.ownerOnly, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ components: [await buildNeutralNoticePanel(interaction.guildId, copy.playlist.ownerOnly)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
         return true;
     }
 
     if (!app.audio) {
-        await interaction.reply({ content: copy.playlist.playerNotReady, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ components: [await buildNeutralNoticePanel(interaction.guildId, copy.playlist.playerNotReady)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
         return true;
     }
 
@@ -223,27 +223,27 @@ export async function handleImportedPlaylistSelect(interaction: StringSelectMenu
     if (!await requireComponentReplyPermissions(interaction)) return true;
 
     if (!interaction.channelId) {
-        await interaction.reply({ content: copy.playlist.addFailed, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ components: [await buildNeutralNoticePanel(interaction.guildId, copy.playlist.addFailed)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
         return true;
     }
 
     pruneImportedPlaylists();
     const cached = importedPlaylists.get(parsed.importId);
     if (!cached || cached.guildId !== interaction.guildId || cached.userId !== interaction.user.id) {
-        await interaction.reply({ content: copy.playlist.notFound, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ components: [await buildNeutralNoticePanel(interaction.guildId, copy.playlist.notFound)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
         return true;
     }
 
     const state = await app.audio.getQueue(interaction.guildId);
     const availableSlots = getAudioQueueAvailableSlots(state);
     if (availableSlots <= 0) {
-        await interaction.reply({ content: copy.playlist.fullQueue, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ components: [await buildNeutralNoticePanel(interaction.guildId, copy.playlist.fullQueue)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
         return true;
     }
 
     const tracks = selectedTracks(cached.playlist, interaction.values).slice(0, availableSlots);
     if (tracks.length === 0) {
-        await interaction.reply({ content: copy.playlist.noSelection, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ components: [await buildNeutralNoticePanel(interaction.guildId, copy.playlist.noSelection)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
         return true;
     }
 
@@ -270,6 +270,7 @@ export async function handleImportedPlaylistSelect(interaction: StringSelectMenu
         await interaction.editReply({
             components: [buildNoticePanel(errorMessage)],
             flags: MessageFlags.IsComponentsV2,
+            allowedMentions: NO_PING_ALLOWED_MENTIONS,
         });
     }
 
@@ -286,18 +287,18 @@ export async function handleImportedPlaylistPageButton(interaction: ButtonIntera
         : defaultAudioCommandCopy;
 
     if (!interaction.guildId || interaction.guildId !== parsed.guildId) {
-        await interaction.reply({ content: copy.playlist.guildMismatch, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ components: [await buildNeutralNoticePanel(interaction.guildId, copy.playlist.guildMismatch)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
         return true;
     }
     if (!await requireTextReplyPermissions(interaction)) return true;
 
     if (interaction.user.id !== parsed.userId) {
-        await interaction.reply({ content: copy.playlist.ownerOnly, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ components: [await buildNeutralNoticePanel(interaction.guildId, copy.playlist.ownerOnly)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
         return true;
     }
 
     if (!app.audio) {
-        await interaction.reply({ content: copy.playlist.playerNotReady, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ components: [await buildNeutralNoticePanel(interaction.guildId, copy.playlist.playerNotReady)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
         return true;
     }
     if (!await requireComponentReplyPermissions(interaction)) return true;
@@ -305,20 +306,21 @@ export async function handleImportedPlaylistPageButton(interaction: ButtonIntera
     pruneImportedPlaylists();
     const cached = importedPlaylists.get(parsed.importId);
     if (!cached || cached.guildId !== interaction.guildId || cached.userId !== interaction.user.id) {
-        await interaction.reply({ content: copy.playlist.notFound, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ components: [await buildNeutralNoticePanel(interaction.guildId, copy.playlist.notFound)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
         return true;
     }
 
     const state = await app.audio.getQueue(interaction.guildId);
     const availableSlots = getAudioQueueAvailableSlots(state);
     if (availableSlots <= 0) {
-        await interaction.reply({ content: copy.playlist.fullQueue, flags: MessageFlags.Ephemeral });
+        await interaction.reply({ components: [await buildNeutralNoticePanel(interaction.guildId, copy.playlist.fullQueue)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
         return true;
     }
 
     await interaction.update({
         components: [buildImportedPlaylistPanel(cached.playlist, interaction.guildId, interaction.user.id, copy, availableSlots, parsed.page)],
         flags: MessageFlags.IsComponentsV2,
+        allowedMentions: NO_PING_ALLOWED_MENTIONS,
     });
     return true;
 }
@@ -336,10 +338,18 @@ async function safeAutocompleteRespond(interaction: AutocompleteInteraction, cho
 
 async function replyPlayError(interaction: ChatInputCommandInteraction, content: string) {
     if (interaction.deferred || interaction.replied) {
-        return interaction.editReply({ content, components: [] }).catch(() => undefined);
+        return interaction.editReply({
+            components: [await buildNeutralNoticePanel(interaction.guildId, content)],
+            flags: MessageFlags.IsComponentsV2,
+            allowedMentions: NO_PING_ALLOWED_MENTIONS,
+        }).catch(() => undefined);
     }
 
-    return interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+    return interaction.reply({
+        components: [await buildNeutralNoticePanel(interaction.guildId, content)],
+        flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
+        allowedMentions: NO_PING_ALLOWED_MENTIONS,
+    }).catch(() => undefined);
 }
 
 export default CommandBuilder({
@@ -378,18 +388,14 @@ export default CommandBuilder({
     ],
 }, async (interaction, app) => {
     if (!interaction.guildId) {
-        return interaction.reply({ content: defaultAudioCommandCopy.serverOnly, flags: MessageFlags.Ephemeral });
+        return interaction.reply({ components: [await buildNeutralNoticePanel(null, defaultAudioCommandCopy.serverOnly)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
     }
     if (!await requireTextReplyPermissions(interaction)) return;
 
     const copy = await getAudioCommandCopy(interaction.guildId);
     const query = interaction.options.getString("query", true);
     if (!app.audio) {
-        return interaction.reply({ content: copy.playlist.playerNotReady, flags: MessageFlags.Ephemeral });
-    }
-
-    if (app.audio.search.isSpotifyPlaylistUrl(query)) {
-        return interaction.reply({ content: SPOTIFY_PLAYLIST_UNAVAILABLE_MESSAGE, flags: MessageFlags.Ephemeral });
+        return interaction.reply({ components: [await buildNeutralNoticePanel(interaction.guildId, copy.playlist.playerNotReady)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
     }
 
     const voiceChannelId = await requirePlayableVoice(interaction, app);
@@ -400,25 +406,26 @@ export default CommandBuilder({
         const playlistImportUrl = await app.audio.search.resolvePlaylistImportUrl(query);
         if (playlistImportUrl) {
             if (!app.audio.lavalink.useable) {
-                return interaction.reply({ content: copy.errors.lavalinkNotReady, flags: MessageFlags.Ephemeral });
+                return interaction.reply({ components: [await buildNeutralNoticePanel(interaction.guildId, copy.errors.lavalinkNotReady)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
             }
 
             const state = await app.audio.getQueue(interaction.guildId);
             const availableSlots = getAudioQueueAvailableSlots(state);
             if (availableSlots <= 0) {
-                return interaction.reply({ content: copy.playlist.fullQueue, flags: MessageFlags.Ephemeral });
+                return interaction.reply({ components: [await buildNeutralNoticePanel(interaction.guildId, copy.playlist.fullQueue)], flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2 });
             }
 
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
             const playlist = await app.audio.search.importPlaylistUrl(playlistImportUrl, interaction.user.id, IMPORT_TRACK_LIMIT);
             if (!playlist || playlist.tracks.length === 0) {
-                return interaction.editReply({ content: copy.playlist.notFound });
+                return interaction.editReply({ components: [await buildNeutralNoticePanel(interaction.guildId, copy.playlist.notFound)], flags: MessageFlags.IsComponentsV2 });
             }
 
             cacheImportedPlaylist(interaction.guildId, interaction.user.id, playlist);
             return interaction.editReply({
                 components: [buildImportedPlaylistPanel(playlist, interaction.guildId, interaction.user.id, copy, availableSlots)],
                 flags: MessageFlags.IsComponentsV2,
+                allowedMentions: NO_PING_ALLOWED_MENTIONS,
             });
         }
 
@@ -436,6 +443,7 @@ export default CommandBuilder({
         return interaction.editReply({
             components: [panel],
             flags: MessageFlags.IsComponentsV2,
+            allowedMentions: NO_PING_ALLOWED_MENTIONS,
         });
     } catch (error) {
         return replyPlayError(interaction, getPlayErrorMessage(copy, error));

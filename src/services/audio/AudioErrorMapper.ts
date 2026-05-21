@@ -1,5 +1,5 @@
 import { LavalinkNotReadyError, LavalinkTimeoutError, QueueLimitReachedError, TrackNotFoundError } from "../../domain/errors/index.js";
-import type { AudioCommandCopy } from "./types.js";
+import type { AudioCommandCopy } from "./audioCommandCache.js";
 
 type ErrorWithCode = Error & { code?: string };
 

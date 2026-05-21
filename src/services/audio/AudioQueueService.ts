@@ -1,43 +1,56 @@
-export type SkipVoteState = {
+export type VoteState = {
   trackKey: string;
   votes: Set<string>;
 };
 
-export type SkipVoteResult = {
-  vote: SkipVoteState;
+export type VoteResult = {
+  vote: VoteState;
   needed: number;
   listeners: number;
-  shouldSkip: boolean;
+  shouldPass: boolean;
 };
 
 export class AudioQueueService {
-  calculateRequiredSkipVotes(listenerCount: number) {
-    return Math.max(1, Math.floor(listenerCount / 2) + 1);
+  calculateRequiredVotes(listenerCount: number) {
+    return Math.max(1, Math.ceil(listenerCount / 2));
   }
 
-  registerSkipVote(
-    currentVote: SkipVoteState | undefined,
+  calculateRequiredSkipVotes(listenerCount: number) {
+    return this.calculateRequiredVotes(listenerCount);
+  }
+
+  registerVote(
+    currentVote: VoteState | undefined,
     trackKey: string,
     userId: string,
     listenerCount: number,
-  ): SkipVoteResult {
+  ): VoteResult {
     const vote = currentVote?.trackKey === trackKey
       ? currentVote
       : { trackKey, votes: new Set<string>() };
 
     vote.votes.add(userId);
-    const needed = this.calculateRequiredSkipVotes(listenerCount);
+    const needed = this.calculateRequiredVotes(listenerCount);
 
     return {
       vote,
       needed,
       listeners: listenerCount,
-      shouldSkip: listenerCount <= 1 || vote.votes.size >= needed,
+      shouldPass: listenerCount <= 1 || vote.votes.size >= needed,
     };
   }
 
+  registerSkipVote(
+    currentVote: VoteState | undefined,
+    trackKey: string,
+    userId: string,
+    listenerCount: number,
+  ) {
+    return this.registerVote(currentVote, trackKey, userId, listenerCount);
+  }
+
   canShuffleQueue(currentTrackCount: number, queuedTrackCount: number) {
-    return currentTrackCount > 0 && currentTrackCount + queuedTrackCount >= 5 && queuedTrackCount >= 4;
+    return currentTrackCount > 0 && queuedTrackCount >= 3;
   }
 
   shuffleTracks<T>(tracks: T[]) {

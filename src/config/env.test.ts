@@ -20,11 +20,17 @@ describe("parseEnv", () => {
       LAVALINK_PORT: "2444",
       PVC_MAX_ALLOWED_USERS: "50",
       PVC_LANG: "de",
+      REDIS_KEY_PREFIX: "nook-dev",
+      AUDIO_STATS_ENABLED: "false",
+      AUDIO_STATS_FLUSH_INTERVAL_MS: "15000",
     });
 
     expect(env.lavalink.port).toBe(2444);
     expect(env.spotify.clientId).toBeNull();
     expect(env.privateVoice.maxAllowedUsers).toBe(25);
     expect(env.privateVoice.language).toBe("de");
+    expect(env.redis.keyPrefix).toBe("nook-dev");
+    expect(env.audio.statsEnabled).toBe(false);
+    expect(env.audio.statsFlushIntervalMs).toBe(15000);
   });
 });

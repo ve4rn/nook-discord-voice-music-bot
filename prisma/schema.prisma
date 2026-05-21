@@ -1,4 +1,3 @@
-// ---------- Prisma ----------
 generator client {
   provider = "prisma-client-js"
 }
@@ -44,10 +43,15 @@ model GuildAudioState {
   guildId           String   @unique
   voiceChannelId    String?
   textChannelId     String?
+  lastVoiceChannelId String?
+  lastTextChannelId  String?
   isPlaying         Boolean  @default(false)
   isPaused          Boolean  @default(false)
+  sessionState      String   @default("idle")
+  stoppedAt         DateTime?
   positionMs        Int      @default(0)
   positionUpdatedAt DateTime?
+  previousTrackData Json?
   currentTrackId    String?  @unique
   currentTrack      Track?   @relation("CurrentAudioTrack", fields: [currentTrackId], references: [id], onDelete: SetNull)
   queue             Track[]  @relation("QueuedAudioTracks")
@@ -66,9 +70,12 @@ model Track {
   duration      Int
   requestedBy   String
   source        String?
+  metadataSource String?
+  audioSource   String?
   author        String?
   encoded       String?
   identifier    String?
+  isrc          String?
   artworkUrl    String?
   isStream      Boolean           @default(false)
   queuePosition Int?
@@ -82,4 +89,74 @@ model Track {
   @@index([guildId])
   @@index([queuedInId, queuePosition])
   @@index([encoded])
+}
+
+enum MusicMetadataSource {
+  SPOTIFY
+  DEEZER
+  YOUTUBE
+  SOUNDCLOUD
+  UNKNOWN
+}
+
+model MusicCatalogTrack {
+  id               String   @id @default(cuid())
+  canonicalKey     String   @unique
+  isrc             String?
+  normalizedIsrc   String?
+  title            String
+  normalizedTitle  String
+  artistName       String?  @map("artist")
+  normalizedArtist String?
+  durationMs       Int?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  monthlyStats MusicMonthlyUserTrackStat[]
+  sources      MusicCatalogTrackSource[]
+
+  @@index([normalizedIsrc])
+  @@index([normalizedTitle])
+  @@index([normalizedArtist])
+}
+
+model MusicCatalogTrackSource {
+  id         String              @id @default(cuid())
+  trackId    String
+  track      MusicCatalogTrack   @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  source     MusicMetadataSource
+  sourceId   String?
+  url        String?
+  title      String?
+  artistName String?
+  durationMs Int?
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+
+  @@unique([source, sourceId])
+  @@index([trackId])
+  @@index([source])
+  @@index([url])
+}
+
+model MusicMonthlyUserTrackStat {
+  userId   String @db.VarChar(32)
+
+  monthKey String @db.Char(7)
+
+  trackId  String
+
+  track    MusicCatalogTrack @relation(fields: [trackId], references: [id], onDelete: Cascade)
+
+  playCount Int    @default(0)
+
+  playedMs  BigInt @default(0)
+
+  updatedAt DateTime @updatedAt
+
+  @@id([userId, monthKey, trackId])
+
+  @@index([userId, monthKey, playedMs(sort: Desc)])
+
+  @@index([trackId])
 }

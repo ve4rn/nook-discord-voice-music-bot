@@ -1,9 +1,9 @@
 import { EventBuilder } from "../../config/EventBuilder.js";
-import { handleAudioButton } from "../../services/audio/audioInteractions.js";
+import { handleAudioButton, handleAudioModal, handleAudioSelect } from "../../services/audio/audioInteractions.js";
 import { handleGuildWelcomeLanguageSelect } from "./guildCreate.js";
 import { handleSetupButton, handleSetupChannelSelect, handleSetupStringSelect } from "../../commands/public/util/setup.js";
-import { handlePlaylistSelect } from "../../commands/public/music/playlist.js";
 import { handleImportedPlaylistPageButton, handleImportedPlaylistSelect } from "../../commands/public/music/play.js";
+import { handleTestErrorSelect } from "../../commands/private/base/test.js";
 
 export default EventBuilder({
     name: "interactionCreate",
@@ -14,11 +14,14 @@ export default EventBuilder({
         if (await handleAudioButton(interaction)) return;
         if (await handleSetupButton(interaction)) return;
     } else if (interaction.isStringSelectMenu()) {
+        if (await handleAudioSelect(interaction)) return;
         if (await handleImportedPlaylistSelect(interaction)) return;
-        if (await handlePlaylistSelect(interaction)) return;
         if (await handleGuildWelcomeLanguageSelect(interaction)) return;
         if (await handleSetupStringSelect(interaction)) return;
+        if (await handleTestErrorSelect(interaction)) return;
     } else if (interaction.isChannelSelectMenu()) {
         await handleSetupChannelSelect(interaction);
+    } else if (interaction.isModalSubmit()) {
+        if (await handleAudioModal(interaction)) return;
     }
 });

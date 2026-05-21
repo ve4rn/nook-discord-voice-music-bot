@@ -1,6 +1,6 @@
 import type { LavalinkManager, SearchPlatform, Track } from "lavalink-client";
 import { env } from "../../config/env.js";
-import { formatDuration, StoredTrack, TrackSearchChoice, trackToStored } from "./types.js";
+import { StoredTrack, TrackSearchChoice, trackToStored } from "./types.js";
 import type { AudioPlaylistConfig, PlaylistTrackConfig } from "./playlists.js";
 import { similarity } from "./levenshtein.js";
 
@@ -8,12 +8,18 @@ type CachedTrack = {
     expiresAt: number;
     track: StoredTrack;
     lavalinkTrack?: Track;
+    metadata?: ExternalTrackMetadata;
+    originalInput?: string;
 };
 
 type ExternalTrackMetadata = {
     title: string;
     author?: string;
     duration?: number;
+    artworkUrl?: string | null;
+    url?: string;
+    metadataSource: string;
+    isrc?: string;
 };
 
 type SpotifyTokenCache = {
@@ -24,7 +30,16 @@ type SpotifyTokenCache = {
 type SpotifyTrackResponse = {
     name?: string;
     duration_ms?: number;
+    external_urls?: {
+        spotify?: string;
+    };
+    external_ids?: {
+        isrc?: string;
+    };
     artists?: Array<{ name?: string }>;
+    album?: {
+        images?: Array<{ url?: string }>;
+    };
 };
 
 type DeezerPlaylistResponse = {
@@ -53,6 +68,7 @@ type DeezerTrack = {
     title?: string;
     duration?: number;
     link?: string;
+    isrc?: string;
     artist?: {
         name?: string;
     };
@@ -66,9 +82,26 @@ type DeezerTrackResponse = DeezerTrack & {
     error?: DeezerApiError;
 };
 
+function metadataFromStoredTrack(track: StoredTrack): ExternalTrackMetadata {
+    return {
+        title: track.title,
+        author: track.author,
+        duration: Number.isFinite(track.duration) ? Math.max(0, Math.floor(track.duration)) : undefined,
+        artworkUrl: track.artworkUrl ?? null,
+        url: track.url,
+        metadataSource: track.metadataSource ?? track.source ?? "unknown",
+        isrc: track.isrc,
+    };
+}
+
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const AUTOCOMPLETE_TIMEOUT_MS = 2_000;
-const SEARCH_SOURCES: SearchPlatform[] = ["scsearch", "ytsearch"];
+const YTM_SEARCH = "ytmsearch" as SearchPlatform;
+const YT_SEARCH = "ytsearch" as SearchPlatform;
+const SC_SEARCH = "scsearch" as SearchPlatform;
+const DZ_SEARCH = "dzsearch" as SearchPlatform;
+const AUDIO_FALLBACK_SOURCES: SearchPlatform[] = [YTM_SEARCH, YT_SEARCH, SC_SEARCH];
+const AUTOCOMPLETE_FALLBACK_SOURCES: SearchPlatform[] = [YTM_SEARCH, YT_SEARCH, SC_SEARCH, DZ_SEARCH];
 const SPOTIFY_URL_RE = /^https?:\/\/open\.spotify\.com\/(intl-[a-z]{2}\/)?(track|album|playlist|episode|show)\/[A-Za-z0-9]+/i;
 const SPOTIFY_URL_PARTS_RE = /^https?:\/\/open\.spotify\.com\/(?:intl-[a-z]{2}\/)?(?<type>track|album|playlist|episode|show)\/(?<id>[A-Za-z0-9]+)/i;
 const YOUTUBE_PLAYLIST_URL_RE = /^https?:\/\/(?:www\.|m\.|music\.)?(?:youtube\.com|youtu\.be)\/(?:playlist\?list=|watch\?.*?[?&]list=|.*?[?&]list=)[A-Za-z0-9_-]+/i;
@@ -86,6 +119,7 @@ export class TrackSearchService {
     private deezerAccessTokenInvalid = false;
     private spotifyApiUnavailable = false;
     private spotifyTokenCache: SpotifyTokenCache | null = null;
+    private readonly debugEnabled = env.runtime.appEnv.trim().toLowerCase() === "dev";
 
     constructor(private readonly manager: LavalinkManager) { }
 
@@ -95,28 +129,77 @@ export class TrackSearchService {
 
     private async autocompleteInner(query: string, requestedBy: string): Promise<TrackSearchChoice[]> {
         if (!query.trim() || !this.manager.useable) return [];
-        const search = await this.search(query, requestedBy);
-        return this.rank(search.rankQuery, search.tracks, requestedBy, search.metadata)
-            .slice(0, 25)
-            .map((track, index) => this.toChoice(track, requestedBy, index));
+        const trimmed = query.trim();
+        if (/^https?:\/\//i.test(trimmed)) {
+            const resolved = await this.resolve(trimmed, requestedBy);
+            return resolved ? [resolved] : [];
+        }
+
+        const choices: TrackSearchChoice[] = [];
+        const seen = new Set<string>();
+        const spotifyChoices = await this.fetchSpotifyAutocompleteChoices(trimmed, requestedBy);
+        for (const choice of spotifyChoices) {
+            const key = this.choiceDedupKey(choice.track);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            choices.push(choice);
+        }
+
+        const rankedFallbackTracks = this.rank(
+            trimmed,
+            await this.searchRaw(trimmed, requestedBy, AUTOCOMPLETE_FALLBACK_SOURCES),
+            requestedBy,
+        );
+        for (const track of rankedFallbackTracks) {
+            const choice = this.toChoice(track, requestedBy, choices.length);
+            const key = this.choiceDedupKey(choice.track);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            choices.push(choice);
+            if (choices.length >= 25) break;
+        }
+
+        return choices.slice(0, 25);
     }
 
     async resolve(input: string, requestedBy: string): Promise<TrackSearchChoice | null> {
         this.pruneCache();
         const cached = this.cache.get(input);
         if (cached) {
+            if (!cached.lavalinkTrack && cached.metadata) {
+                const resolved = await this.resolvePlaybackFromMetadata(cached.metadata, requestedBy, cached.originalInput);
+                if (!resolved) return null;
+                this.cache.set(input, {
+                    expiresAt: Date.now() + CACHE_TTL_MS,
+                    track: resolved.track,
+                    lavalinkTrack: resolved.lavalinkTrack,
+                    metadata: cached.metadata,
+                    originalInput: cached.originalInput,
+                });
+                return {
+                    token: input,
+                    label: this.formatLabel(resolved.track),
+                    track: resolved.track,
+                    lavalinkTrack: resolved.lavalinkTrack,
+                };
+            }
             return {
                 token: input,
-                label: cached.track.title,
+                label: this.formatLabel(cached.track),
                 track: cached.track,
                 lavalinkTrack: cached.lavalinkTrack,
             };
         }
 
         if (!this.manager.useable) return null;
-        const search = await this.search(input, requestedBy);
-        const best = this.rank(search.rankQuery, search.tracks, requestedBy, search.metadata)[0];
-        return best ? this.toChoice(best, requestedBy, 0) : null;
+        const resolved = await this.resolveInput(input, requestedBy);
+        if (!resolved) return null;
+        return {
+            token: input,
+            label: this.formatLabel(resolved.track),
+            track: resolved.track,
+            lavalinkTrack: resolved.lavalinkTrack,
+        };
     }
 
     isSupportedPlaylistUrl(input: string) {
@@ -157,10 +240,6 @@ export class TrackSearchService {
         const normalizedUrl = await this.resolvePlaylistImportUrl(url);
         if (!normalizedUrl) return null;
 
-        if (SPOTIFY_PLAYLIST_URL_RE.test(normalizedUrl)) {
-            return null;
-        }
-
         if (DEEZER_PLAYLIST_URL_RE.test(normalizedUrl)) {
             const deezerPlaylist = await this.importDeezerPlaylistUrl(normalizedUrl, limit);
             if (deezerPlaylist) return deezerPlaylist;
@@ -198,28 +277,92 @@ export class TrackSearchService {
         return null;
     }
 
-    private async search(query: string, requestedBy: string) {
-        const deezerMetadata = await this.fetchDeezerTrackMetadata(query);
-        if (deezerMetadata) {
-            const rankQuery = [deezerMetadata.author, deezerMetadata.title].filter(Boolean).join(" ");
-            return { rankQuery, tracks: await this.searchRaw(rankQuery, requestedBy), metadata: deezerMetadata };
+    private async resolveInput(input: string, requestedBy: string) {
+        const query = input.trim();
+        const metadata = await this.resolveMetadataForInput(query);
+        if (metadata) {
+            this.debug("metadata resolved for input", {
+                input: query,
+                metadataSource: metadata.metadataSource,
+                title: metadata.title,
+                author: metadata.author,
+            });
+            return await this.resolvePlaybackFromMetadata(metadata, requestedBy, query);
         }
 
-        if (!this.isSpotifyUrl(query)) {
-            return { rankQuery: query, tracks: await this.searchRaw(query, requestedBy), metadata: null };
+        const directTracks = await this.searchDirect(query, requestedBy);
+        if (directTracks.length > 0) {
+            const bestDirect = this.rank(query, directTracks, requestedBy)[0] ?? directTracks[0];
+            return this.createResolvedResult(bestDirect, requestedBy);
         }
 
-        const metadata = await this.fetchSpotifyApiTrackMetadata(query)
-            ?? await this.fetchSpotifyOEmbedMetadata(query);
-        if (!metadata) {
-            return { rankQuery: query, tracks: [], metadata: null };
-        }
-
-        const rankQuery = [metadata.author, metadata.title].filter(Boolean).join(" ");
-        return { rankQuery, tracks: await this.searchRaw(rankQuery, requestedBy), metadata };
+        const fallbackTracks = this.rank(query, await this.searchRaw(query, requestedBy, AUDIO_FALLBACK_SOURCES), requestedBy);
+        const best = fallbackTracks[0];
+        return best ? this.createResolvedResult(best, requestedBy) : null;
     }
 
-    private async searchRaw(query: string, requestedBy: string, sources: SearchPlatform[] = SEARCH_SOURCES): Promise<Track[]> {
+    private async resolveMetadataForInput(query: string): Promise<ExternalTrackMetadata | null> {
+        const deezerMetadata = await this.fetchDeezerTrackMetadata(query);
+        if (deezerMetadata) return deezerMetadata;
+
+        if (this.isSpotifyUrl(query)) {
+            return await this.fetchSpotifyApiTrackMetadata(query)
+                ?? await this.fetchSpotifyOEmbedMetadata(query);
+        }
+
+        return await this.fetchSpotifySearchMetadata(query);
+    }
+
+    private async fetchSpotifyAutocompleteChoices(query: string, requestedBy: string) {
+        const metadataTracks = await this.fetchSpotifySearchMetadataList(query, 8);
+        return metadataTracks.map((metadata, index) => this.toMetadataChoice(metadata, requestedBy, index, query));
+    }
+
+    private async fetchSpotifySearchMetadata(query: string): Promise<ExternalTrackMetadata | null> {
+        const tracks = await this.fetchSpotifySearchMetadataList(query, 1);
+        return tracks[0] ?? null;
+    }
+
+    private async fetchSpotifySearchMetadataList(query: string, limit: number): Promise<ExternalTrackMetadata[]> {
+        const token = await this.getSpotifyAccessToken();
+        if (!token) return [];
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 3500);
+        timeout.unref?.();
+
+        const url = new URL("https://api.spotify.com/v1/search");
+        url.searchParams.set("q", query);
+        url.searchParams.set("type", "track");
+        url.searchParams.set("limit", String(Math.max(1, Math.min(limit, 10))));
+
+        const response = await fetch(url, {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: controller.signal,
+        }).catch(() => null);
+        clearTimeout(timeout);
+
+        if (!response) return [];
+        if (!response.ok) return [];
+
+        const data = await response.json().catch(() => null) as { tracks?: { items?: SpotifyTrackResponse[] } } | null;
+        return (data?.tracks?.items ?? [])
+            .map(track => this.spotifyTrackToMetadata(track))
+            .filter((track): track is ExternalTrackMetadata => Boolean(track));
+    }
+
+    private async searchDirect(query: string, requestedBy: string): Promise<Track[]> {
+        const trimmed = query.trim();
+        if (!trimmed || !this.manager.useable || !/^https?:\/\//i.test(trimmed)) return [];
+
+        const node = this.manager.nodeManager.leastUsedNodes("memory")[0];
+        if (!node) return [];
+
+        const result = await node.search({ query: trimmed }, { id: requestedBy }).catch(() => null);
+        return result?.tracks?.filter(track => this.isPlayableTrack(track)) ?? [];
+    }
+
+    private async searchRaw(query: string, requestedBy: string, sources: SearchPlatform[] = AUDIO_FALLBACK_SOURCES): Promise<Track[]> {
         const node = this.manager.nodeManager.leastUsedNodes("memory")[0];
         if (!node) return [];
 
@@ -282,13 +425,7 @@ export class TrackSearchService {
         if (!response.ok) return null;
 
         const data = await response.json().catch(() => null) as SpotifyTrackResponse | null;
-        if (!data?.name) return null;
-
-        return {
-            title: data.name,
-            author: data.artists?.map(artist => artist.name).filter(Boolean).join(", "),
-            duration: data.duration_ms,
-        };
+        return data ? this.spotifyTrackToMetadata(data) : null;
     }
 
     private async getSpotifyAccessToken() {
@@ -300,6 +437,7 @@ export class TrackSearchService {
         const clientId = env.spotify.clientId;
         const clientSecret = env.spotify.clientSecret;
         if (!clientId || !clientSecret) {
+            this.debug("spotify credentials missing");
             this.spotifyApiUnavailable = true;
             return null;
         }
@@ -325,6 +463,7 @@ export class TrackSearchService {
         if (!response) return null;
 
         if (response.status === 400 || response.status === 401 || response.status === 403) {
+            this.debug("spotify token rejected", { status: response.status });
             this.spotifyApiUnavailable = true;
             this.spotifyTokenCache = null;
             return null;
@@ -343,6 +482,7 @@ export class TrackSearchService {
             accessToken: data.access_token,
             expiresAt: Date.now() + expiresInMs - 30_000,
         };
+        this.debug("spotify token refreshed");
         return data.access_token;
     }
 
@@ -358,7 +498,7 @@ export class TrackSearchService {
             if (!response.ok) return null;
             const data = await response.json() as { title?: string };
             if (typeof data.title !== "string" || !data.title.trim()) return null;
-            return this.parseSpotifyOEmbedTitle(data.title);
+            return this.parseSpotifyOEmbedTitle(data.title, url);
         } catch {
             return null;
         } finally {
@@ -366,7 +506,7 @@ export class TrackSearchService {
         }
     }
 
-    private parseSpotifyOEmbedTitle(title: string): ExternalTrackMetadata {
+    private parseSpotifyOEmbedTitle(title: string, url?: string): ExternalTrackMetadata {
         const normalized = title.trim();
         const parts = normalized.split(" - ");
         if (parts.length >= 2) {
@@ -374,9 +514,11 @@ export class TrackSearchService {
             return {
                 title: trackTitle.trim(),
                 author: authorParts.join(" - ").trim(),
+                url,
+                metadataSource: "spotify",
             };
         }
-        return { title: normalized };
+        return { title: normalized, url, metadataSource: "spotify" };
     }
 
     private async fetchDeezerTrackMetadata(input: string): Promise<ExternalTrackMetadata | null> {
@@ -393,6 +535,10 @@ export class TrackSearchService {
             title: track.title,
             author: track.artist?.name,
             duration: track.duration ? track.duration * 1000 : undefined,
+            artworkUrl: track.album?.cover_big ?? track.album?.cover_medium,
+            url: track.link,
+            metadataSource: "deezer",
+            isrc: track.isrc,
         };
     }
 
@@ -411,18 +557,18 @@ export class TrackSearchService {
     private rank(query: string, tracks: Track[], requestedBy: string, metadata: ExternalTrackMetadata | null = null) {
         return tracks
             .map((track, index) => {
-                const title = `${track.info.title} ${track.info.author}`;
+                const stored = trackToStored(track, requestedBy);
+                const title = `${stored.title} ${stored.author ?? ""}`;
                 const fuzzy = similarity(query, title);
                 const authorScore = metadata?.author && title.toLowerCase().includes(metadata.author.toLowerCase()) ? 0.2 : 0;
-                const exactTitleScore = metadata?.title && track.info.title.toLowerCase().includes(metadata.title.toLowerCase()) ? 0.2 : 0;
-                const durationDiff = metadata?.duration ? Math.abs(track.info.duration - metadata.duration) : null;
+                const exactTitleScore = metadata?.title && stored.title.toLowerCase().includes(metadata.title.toLowerCase()) ? 0.2 : 0;
+                const durationDiff = metadata?.duration ? Math.abs(stored.duration - metadata.duration) : null;
                 const durationScore = durationDiff == null
-                    ? (track.info.duration > 30_000 && track.info.duration < 15 * 60_000 ? 0.08 : 0)
+                    ? (stored.duration > 30_000 && stored.duration < 15 * 60_000 ? 0.08 : 0)
                     : Math.max(0, 0.25 - durationDiff / 120_000);
                 const popularityScore = Math.max(0, 0.25 - index * 0.01);
                 return {
                     track,
-                    stored: trackToStored(track, requestedBy),
                     score: fuzzy + authorScore + exactTitleScore + durationScore + popularityScore,
                 };
             })
@@ -430,19 +576,122 @@ export class TrackSearchService {
             .map(item => item.track);
     }
 
-    private toChoice(track: Track, requestedBy: string, index: number): TrackSearchChoice {
-        const stored = trackToStored(track, requestedBy);
+    private toChoice(track: Track, requestedBy: string, index: number, metadata?: ExternalTrackMetadata): TrackSearchChoice {
+        const preparedTrack = metadata ? this.decorateTrack(track, metadata) : track;
+        const stored = trackToStored(preparedTrack, requestedBy);
         const token = `trk:${Date.now().toString(36)}:${index}:${Math.random().toString(36).slice(2, 8)}`;
         this.cache.set(token, {
             expiresAt: Date.now() + CACHE_TTL_MS,
             track: stored,
-            lavalinkTrack: track,
+            lavalinkTrack: preparedTrack,
+            metadata,
         });
         return {
             token,
             label: this.formatLabel(stored),
             track: stored,
-            lavalinkTrack: track,
+            lavalinkTrack: preparedTrack,
+        };
+    }
+
+    private toMetadataChoice(metadata: ExternalTrackMetadata, requestedBy: string, index: number, originalInput: string): TrackSearchChoice {
+        const stored: StoredTrack = {
+            title: metadata.title,
+            url: metadata.url ?? originalInput,
+            duration: metadata.duration ?? 0,
+            requestedBy,
+            source: metadata.metadataSource,
+            metadataSource: metadata.metadataSource,
+            author: metadata.author,
+            isrc: metadata.isrc,
+            artworkUrl: metadata.artworkUrl ?? null,
+            isStream: false,
+        };
+        const token = `trk:${Date.now().toString(36)}:${index}:${Math.random().toString(36).slice(2, 8)}`;
+        this.cache.set(token, {
+            expiresAt: Date.now() + CACHE_TTL_MS,
+            track: stored,
+            metadata,
+            originalInput,
+        });
+        return {
+            token,
+            label: this.formatLabel(stored),
+            track: stored,
+        };
+    }
+
+    private async resolvePlaybackFromMetadata(metadata: ExternalTrackMetadata, requestedBy: string, originalInput?: string) {
+        const query = [metadata.author, metadata.title].filter(Boolean).join(" - ").trim() || metadata.title;
+        const attempts: Array<{ query: string; sources: SearchPlatform[] }> = [];
+
+        if (metadata.isrc) {
+            attempts.push({ query: metadata.isrc, sources: [YTM_SEARCH] });
+            attempts.push({ query: metadata.isrc, sources: [YT_SEARCH] });
+        }
+
+        attempts.push({ query, sources: [YTM_SEARCH] });
+        attempts.push({ query, sources: [YT_SEARCH] });
+        attempts.push({ query, sources: [SC_SEARCH] });
+
+        for (const attempt of attempts) {
+            const tracks = await this.searchRaw(attempt.query, requestedBy, attempt.sources);
+            const best = this.rank(query, tracks, requestedBy, metadata)[0];
+            if (!best) continue;
+            return this.createResolvedResult(best, requestedBy, metadata);
+        }
+
+        if (originalInput && /^https?:\/\//i.test(originalInput)) {
+            const directTracks = await this.searchDirect(originalInput, requestedBy);
+            const best = this.rank(query, directTracks, requestedBy, metadata)[0];
+            if (best) return this.createResolvedResult(best, requestedBy, metadata);
+        }
+
+        return null;
+    }
+
+    private createResolvedResult(track: Track, requestedBy: string, metadata?: ExternalTrackMetadata) {
+        const preparedTrack = metadata ? this.decorateTrack(track, metadata) : track;
+        return {
+            track: trackToStored(preparedTrack, requestedBy),
+            lavalinkTrack: preparedTrack,
+        };
+    }
+
+    applyStoredMetadata(track: Track, stored: StoredTrack) {
+        return this.decorateTrack(track, metadataFromStoredTrack(stored));
+    }
+
+    private decorateTrack(track: Track, metadata: ExternalTrackMetadata) {
+        const original = trackToStored(track, "unknown");
+        const display = {
+            title: metadata.title,
+            url: metadata.url ?? original.url,
+            duration: metadata.duration ?? original.duration,
+            requestedBy: original.requestedBy,
+            source: metadata.metadataSource,
+            metadataSource: metadata.metadataSource,
+            audioSource: original.audioSource ?? original.source,
+            author: metadata.author ?? original.author,
+            identifier: original.identifier,
+            isrc: metadata.isrc,
+            artworkUrl: metadata.artworkUrl ?? original.artworkUrl,
+            isStream: original.isStream,
+        } satisfies Partial<StoredTrack>;
+        (track as Track & { __nookDisplay?: Partial<StoredTrack> }).__nookDisplay = display;
+        return track;
+    }
+
+    private spotifyTrackToMetadata(track: SpotifyTrackResponse): ExternalTrackMetadata | null {
+        if (!track.name) return null;
+        return {
+            title: track.name,
+            author: track.artists?.map(artist => artist.name).filter(Boolean).join(", "),
+            duration: track.duration_ms,
+            artworkUrl: track.album?.images?.[0]?.url ?? null,
+            url: track.external_urls?.spotify,
+            metadataSource: "spotify",
+            isrc: track.external_ids?.isrc,
         };
     }
 
@@ -666,8 +915,22 @@ export class TrackSearchService {
     }
 
     private formatLabel(track: StoredTrack) {
-        const text = `${track.title}${track.author ? ` - ${track.author}` : ""} (${formatDuration(track.duration)})`;
+        const icon = this.getSourceIcon(track.metadataSource ?? track.source);
+        const author = track.author?.trim() || "Unknown artist";
+        const text = `${icon} ${author} - ${track.title}`;
         return text.length > 100 ? `${text.slice(0, 97)}...` : text;
+    }
+
+    private choiceDedupKey(track: StoredTrack) {
+        return `${track.author ?? ""}::${track.title}`.toLowerCase();
+    }
+
+    private getSourceIcon(source?: string) {
+        const normalized = (source ?? "").toLowerCase();
+        if (normalized.includes("spotify")) return "🟢";
+        if (normalized.includes("soundcloud")) return "🟠";
+        if (normalized.includes("deezer")) return "💜";
+        return "🟥";
     }
 
     private pruneCache() {
@@ -691,5 +954,10 @@ export class TrackSearchService {
                     resolve(fallback);
                 });
         });
+    }
+
+    private debug(message: string, context?: Record<string, unknown>) {
+        if (!this.debugEnabled) return;
+        console.info(`[AudioSearch] ${message}`, context ?? "");
     }
 }

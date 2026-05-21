@@ -34,6 +34,18 @@ export type AppEnv = {
   deezer: {
     accessToken: string | null;
   };
+  redis: {
+    url: string | null;
+    keyPrefix: string;
+  };
+  audio: {
+    energySavingIdleMs: number;
+    statsEnabled: boolean;
+    statsFlushIntervalMs: number;
+  };
+  logs: {
+    privateLogsChannelId: string | null;
+  };
   links: {
     repositoryUrl: string | null;
     supportServerUrl: string | null;
@@ -126,6 +138,18 @@ export function parseEnv(raw: RawEnv): AppEnv {
     },
     deezer: {
       accessToken: optionalString(raw, "DEEZER_ACCESS_TOKEN"),
+    },
+    redis: {
+      url: optionalString(raw, "REDIS_URL"),
+      keyPrefix: optionalString(raw, "REDIS_KEY_PREFIX") ?? "nook",
+    },
+    audio: {
+      energySavingIdleMs: integer(raw, "AUDIO_ENERGY_SAVING_IDLE_MS", 30 * 60 * 1000),
+      statsEnabled: boolean(raw, "AUDIO_STATS_ENABLED", true),
+      statsFlushIntervalMs: integer(raw, "AUDIO_STATS_FLUSH_INTERVAL_MS", 60_000),
+    },
+    logs: {
+      privateLogsChannelId: optionalChannelId(raw, "PRIVATE_LOGS_CHANNEL_ID"),
     },
     links: {
       repositoryUrl: optionalString(raw, "GITHUB_REPOSITORY_URL") ?? optionalString(raw, "REPOSITORY_URL"),

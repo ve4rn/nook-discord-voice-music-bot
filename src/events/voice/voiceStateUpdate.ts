@@ -7,5 +7,5 @@ export default EventBuilder({
     description: "Handle updates to users' voice states for private voice channel management and music control",
 }, async (oldState, newState) => {
     await privateVoiceManager.handleVoiceStateUpdate(oldState, newState);
-    await (newState.client as App).audio?.handleBotVoiceStateUpdate(oldState, newState);
+    await (newState.client as App).audio?.handleVoiceStateActivity(oldState, newState);
 });

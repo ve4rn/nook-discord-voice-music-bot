@@ -259,7 +259,15 @@ export default class AppManager {
                         ConsoleMessage.warn(`Event file is missing a name: ${folder}/${file}`, "Events");
                         continue;
                     }
-                    this.app.on(event.options.name, (...args) => event.execute(...args));
+                    this.app.on(event.options.name, (...args) => {
+                        void event.execute(...args).catch(error => {
+                            if (this.isIgnorableDiscordInteractionError(error)) {
+                                ConsoleMessage.warn(`Ignored expired interaction in event ${event.options.name}.`, "Events");
+                                return;
+                            }
+                            ConsoleMessage.error(`Event ${event.options.name} failed.`, "Events", error);
+                        });
+                    });
                     loadedEvents++;
                     this.bootStats.events++;
                     ConsoleMessage.debug(`Bound ${event.options.name} from ${folder}/${file}.`, "Events");
@@ -345,6 +353,11 @@ export default class AppManager {
         return (error as { code?: number })?.code === 10062;
     }
 
+    private isIgnorableDiscordInteractionError(error: unknown) {
+        const code = (error as { code?: number })?.code;
+        return code === 10062 || code === 40060;
+    }
+
     private getPackageVersion() {
         try {
             const packagePath = path.resolve(process.cwd(), "package.json");
@@ -383,6 +396,11 @@ export default class AppManager {
         const memory = process.memoryUsage();
         const apiLatency = await this.measureDiscordApiLatency();
         const prismaHealthy = await this.measureDatabaseHealth();
+        const redisStats = this.app.audio?.getMusicStatsBufferHealth() ?? {
+            configured: false,
+            connected: false,
+            restoredEntries: 0,
+        };
         const uptimeMs = Date.now() - this.bootStats.startedAt;
 
         ConsoleMessage.info("Boot statistics", "Stats");
@@ -396,6 +414,8 @@ export default class AppManager {
             { Metric: "Discord WS ping", Value: `${Math.round(this.app.ws.ping)} ms` },
             { Metric: "Discord API ping", Value: apiLatency.ms === null ? `failed (${apiLatency.status})` : `${apiLatency.ms} ms (${apiLatency.status})` },
             { Metric: "Prisma health", Value: prismaHealthy ? "ok" : "failed" },
+            { Metric: "Redis stats buffer", Value: !redisStats.configured ? "not configured" : (redisStats.connected ? "ok" : "failed") },
+            { Metric: "Redis restored deltas", Value: redisStats.restoredEntries },
             { Metric: "Memory RSS", Value: this.formatMemory(memory.rss / 1024 / 1024) },
             { Metric: "Memory heap", Value: `${this.formatMemory(memory.heapUsed / 1024 / 1024)} / ${this.formatMemory(memory.heapTotal / 1024 / 1024)}` },
             { Metric: "Node", Value: process.version },

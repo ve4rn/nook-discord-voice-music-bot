@@ -16,12 +16,13 @@ type PermissionRequirement = {
   key: PermissionKey;
 };
 
-type PermissionKey =
+export type PermissionKey =
   | "ViewChannel"
   | "SendMessages"
   | "ReadMessageHistory"
   | "EmbedLinks"
   | "AttachFiles"
+  | "ManageMessages"
   | "ManageChannels"
   | "MoveMembers"
   | "Connect"
@@ -73,6 +74,7 @@ export const VOICE_MEMBER_PERMISSIONS: PermissionRequirement[] = [
   { key: "ReadMessageHistory", flag: PermissionFlagsBits.ReadMessageHistory },
   { key: "EmbedLinks", flag: PermissionFlagsBits.EmbedLinks },
   { key: "AttachFiles", flag: PermissionFlagsBits.AttachFiles },
+  { key: "ManageMessages", flag: PermissionFlagsBits.ManageMessages },
 ];
 
 const labels: Record<PermissionLanguage, Record<PermissionKey, string>> = {
@@ -80,14 +82,15 @@ const labels: Record<PermissionLanguage, Record<PermissionKey, string>> = {
     ViewChannel: "Voir les salons",
     SendMessages: "Envoyer des messages",
     ReadMessageHistory: "Lire l'historique des messages",
-    EmbedLinks: "Intégrer des liens",
+    EmbedLinks: "Integrer des liens",
     AttachFiles: "Joindre des fichiers",
-    ManageChannels: "Gérer les salons",
-    MoveMembers: "Déplacer des membres",
+    ManageMessages: "Gerer les messages",
+    ManageChannels: "Gerer les salons",
+    MoveMembers: "Deplacer des membres",
     Connect: "Se connecter",
     Speak: "Parler",
-    UseVAD: "Utiliser la détection vocale",
-    Stream: "Vidéo",
+    UseVAD: "Utiliser la detection vocale",
+    Stream: "Video",
   },
   en: {
     ViewChannel: "View Channels",
@@ -95,6 +98,7 @@ const labels: Record<PermissionLanguage, Record<PermissionKey, string>> = {
     ReadMessageHistory: "Read Message History",
     EmbedLinks: "Embed Links",
     AttachFiles: "Attach Files",
+    ManageMessages: "Manage Messages",
     ManageChannels: "Manage Channels",
     MoveMembers: "Move Members",
     Connect: "Connect",
@@ -108,20 +112,22 @@ const labels: Record<PermissionLanguage, Record<PermissionKey, string>> = {
     ReadMessageHistory: "Leer el historial de mensajes",
     EmbedLinks: "Insertar enlaces",
     AttachFiles: "Adjuntar archivos",
+    ManageMessages: "Gestionar mensajes",
     ManageChannels: "Gestionar canales",
     MoveMembers: "Mover miembros",
     Connect: "Conectar",
     Speak: "Hablar",
     UseVAD: "Usar actividad de voz",
-    Stream: "Vídeo",
+    Stream: "Video",
   },
   de: {
-    ViewChannel: "Kanäle ansehen",
+    ViewChannel: "Kanaele ansehen",
     SendMessages: "Nachrichten senden",
     ReadMessageHistory: "Nachrichtenverlauf lesen",
     EmbedLinks: "Links einbetten",
-    AttachFiles: "Dateien anhängen",
-    ManageChannels: "Kanäle verwalten",
+    AttachFiles: "Dateien anhaengen",
+    ManageMessages: "Nachrichten verwalten",
+    ManageChannels: "Kanaele verwalten",
     MoveMembers: "Mitglieder verschieben",
     Connect: "Verbinden",
     Speak: "Sprechen",
@@ -154,8 +160,24 @@ export function permissionLabels(language: PermissionLanguage, missing: Permissi
   return uniqueKeys(missing).map(key => localizedLabels[key] ?? key);
 }
 
+export function discordPermissionNames(missing: PermissionKey[]) {
+  return uniqueKeys(missing).map(key => labels.en[key] ?? key);
+}
+
+export function permissionLabel(language: PermissionLanguage, key: PermissionKey) {
+  return permissionLabels(language, [key])[0] ?? key;
+}
+
 export function formatPermissionList(language: PermissionLanguage, missing: PermissionKey[]) {
   return permissionLabels(language, missing).map(label => `- ${label}`).join("\n");
+}
+
+export function formatDiscordPermissionInline(missing: PermissionKey[]) {
+  return discordPermissionNames(missing).map(name => `\`${name}\``).join(", ");
+}
+
+export function formatDiscordPermissionList(missing: PermissionKey[]) {
+  return discordPermissionNames(missing).map(name => `- \`${name}\``).join("\n");
 }
 
 export function checkCanSendText(channel: GuildBasedChannel) {

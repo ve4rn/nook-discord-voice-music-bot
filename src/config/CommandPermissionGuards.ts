@@ -9,9 +9,12 @@ import { privateVoiceManager } from "./PrivateVoiceManager.js";
 import {
   checkCanSendComponents,
   checkCanSendText,
-  formatPermissionList,
+  formatDiscordPermissionInline,
+  type PermissionKey,
   type PermissionLanguage,
 } from "./PermissionChecks.js";
+import { parseLanguage as parseI18nLanguage, t } from "./i18n.js";
+import { buildPermissionIssuePayload } from "../services/audio/permissionPanels.js";
 
 type CommandInteractionWithReply =
   | ButtonInteraction
@@ -19,51 +22,48 @@ type CommandInteractionWithReply =
   | StringSelectMenuInteraction
   | ChannelSelectMenuInteraction;
 
-function parseLanguage(raw: string | null | undefined): PermissionLanguage {
-  if (raw === "fr" || raw === "en" || raw === "es" || raw === "de") return raw;
-  return "fr";
+function parsePermissionLanguage(raw: string | null | undefined): PermissionLanguage {
+  const parsed = parseI18nLanguage(raw);
+  if (parsed === "fr" || parsed === "en" || parsed === "es" || parsed === "de") return parsed;
+  return "en";
 }
 
 async function getLanguage(guildId: string | null | undefined): Promise<PermissionLanguage> {
-  if (!guildId) return "fr";
+  if (!guildId) return "en";
   const cached = privateVoiceManager.guildConfigCache.get(guildId);
   const config = cached ?? await privateVoiceManager.getOrCreateGuildConfig(guildId).catch(() => null);
-  return parseLanguage(config?.lang);
+  return parsePermissionLanguage(config?.lang);
 }
 
-function message(language: PermissionLanguage, permissions: string) {
-  if (language === "en") {
-    return `I cannot display this panel because I am missing permissions in this channel:\n${permissions}`;
-  }
-  if (language === "es") {
-    return `No puedo mostrar este panel porque me faltan permisos en este canal:\n${permissions}`;
-  }
-  if (language === "de") {
-    return `Ich kann dieses Panel nicht anzeigen, weil mir in diesem Kanal Berechtigungen fehlen:\n${permissions}`;
-  }
-  return `Je ne peux pas afficher ce panneau car il me manque des permissions dans ce salon:\n${permissions}`;
-}
+async function replyMissingPermissions(
+  interaction: CommandInteractionWithReply,
+  language: PermissionLanguage,
+  missing: PermissionKey[],
+  voice = false,
+) {
+  const payload = await buildPermissionIssuePayload(interaction.guildId, missing, voice);
+  const content = t(
+    language,
+    voice ? "common.missingVoicePermissionsDescription" : "common.missingPermissionsDescription",
+    { permissions: formatDiscordPermissionInline(missing) },
+  );
 
-function textMessage(language: PermissionLanguage, permissions: string) {
-  if (language === "en") {
-    return `I cannot answer properly in this channel because I am missing permissions:\n${permissions}`;
-  }
-  if (language === "es") {
-    return `No puedo responder correctamente en este canal porque me faltan permisos:\n${permissions}`;
-  }
-  if (language === "de") {
-    return `Ich kann in diesem Kanal nicht richtig antworten, weil mir Berechtigungen fehlen:\n${permissions}`;
-  }
-  return `Je ne peux pas répondre correctement dans ce salon car il me manque des permissions:\n${permissions}`;
-}
-
-async function replyMissingPermissions(interaction: CommandInteractionWithReply, content: string) {
   if (interaction.deferred || interaction.replied) {
-    await interaction.followUp({ content, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+    await interaction.followUp({
+      ...payload,
+      flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
+    }).catch(async () => {
+      await interaction.followUp({ content, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+    });
     return;
   }
 
-  await interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+  await interaction.reply({
+    ...payload,
+    flags: MessageFlags.Ephemeral | MessageFlags.IsComponentsV2,
+  }).catch(async () => {
+    await interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => undefined);
+  });
 }
 
 export async function requireComponentReplyPermissions(interaction: CommandInteractionWithReply) {
@@ -73,7 +73,7 @@ export async function requireComponentReplyPermissions(interaction: CommandInter
   if (check.ok) return true;
 
   const language = await getLanguage(interaction.guildId);
-  await replyMissingPermissions(interaction, message(language, formatPermissionList(language, check.missing)));
+  await replyMissingPermissions(interaction, language, check.missing);
   return false;
 }
 
@@ -84,6 +84,6 @@ export async function requireTextReplyPermissions(interaction: CommandInteractio
   if (check.ok) return true;
 
   const language = await getLanguage(interaction.guildId);
-  await replyMissingPermissions(interaction, textMessage(language, formatPermissionList(language, check.missing)));
+  await replyMissingPermissions(interaction, language, check.missing);
   return false;
 }

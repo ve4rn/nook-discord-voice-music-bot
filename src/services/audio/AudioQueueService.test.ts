@@ -2,11 +2,12 @@ import { describe, expect, it } from "vitest";
 import { AudioQueueService } from "./AudioQueueService.js";
 
 describe("AudioQueueService", () => {
-  it("requires a majority of listeners to skip", () => {
+  it("requires at least half of listeners to vote", () => {
     const service = new AudioQueueService();
 
     expect(service.calculateRequiredSkipVotes(1)).toBe(1);
-    expect(service.calculateRequiredSkipVotes(2)).toBe(2);
+    expect(service.calculateRequiredSkipVotes(2)).toBe(1);
+    expect(service.calculateRequiredSkipVotes(4)).toBe(2);
     expect(service.calculateRequiredSkipVotes(5)).toBe(3);
   });
 
@@ -23,8 +24,8 @@ describe("AudioQueueService", () => {
   it("allows shuffle only when the displayed queue is large enough", () => {
     const service = new AudioQueueService();
 
-    expect(service.canShuffleQueue(1, 4)).toBe(true);
-    expect(service.canShuffleQueue(1, 3)).toBe(false);
+    expect(service.canShuffleQueue(1, 3)).toBe(true);
+    expect(service.canShuffleQueue(1, 2)).toBe(false);
     expect(service.canShuffleQueue(0, 5)).toBe(false);
   });
 });
