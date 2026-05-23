@@ -385,16 +385,24 @@ export class AudioManager {
     }
 
     this.previousVotes.delete(guildId);
-    const previous = await player.queue.shiftPrevious().catch(() => null);
+    const previous = await this.resolveStoredTrack(player, state.previous);
     if (!previous) {
       return { previous: false, reason: "no_previous" as const, votes: voteResult.vote.votes.size, needed: voteResult.needed, listeners: voteResult.listeners };
     }
 
-    if (player.queue.current) {
-      player.queue.add(player.queue.current, 0);
-    }
-    await this.repository.insertFront(guildId, state.current!).catch(() => null);
+    const currentTrack = player.queue.current as Track;
+    const nextQueueTracks = prependLiveTrackOnce(currentTrack, [...player.queue.tracks] as Track[]);
+    const nextQueueStored = prependStoredTrackOnce(state.current!, state.queue);
+
     await this.musicStats.endTrack(guildId);
+    await player.stopPlaying(true).catch(() => null);
+    await player.queue.splice(0, player.queue.tracks.length).catch(() => null);
+    player.queue.add(previous);
+    if (nextQueueTracks.length > 0) {
+      player.queue.add(nextQueueTracks);
+    }
+    await this.repository.setCurrent(guildId, state.previous).catch(() => null);
+    await this.repository.replaceQueue(guildId, nextQueueStored).catch(() => null);
     await player.play({ clientTrack: previous }).catch(() => null);
     return { previous: true, votes: voteResult.vote.votes.size, needed: voteResult.needed, listeners: voteResult.listeners };
   }
@@ -1046,4 +1054,26 @@ export class AudioManager {
     this.sessionFinalizationCooldowns.set(guildId, Date.now() + 5_000);
     return true;
   }
+}
+
+function sameStoredTrack(left: StoredTrack, right: StoredTrack) {
+  return getStoredTrackIdentity(left) === getStoredTrackIdentity(right);
+}
+
+function getStoredTrackIdentity(track: StoredTrack) {
+  return track.identifier || track.encoded || track.url || `${track.author ?? ""}:${track.title}`;
+}
+
+function getLiveTrackIdentity(track: Track) {
+  return track.encoded || track.info.identifier || track.info.uri || `${track.info.author ?? ""}:${track.info.title}`;
+}
+
+export function prependStoredTrackOnce(current: StoredTrack, queue: StoredTrack[]) {
+  if (queue[0] && sameStoredTrack(queue[0], current)) return [...queue];
+  return [current, ...queue];
+}
+
+export function prependLiveTrackOnce(current: Track, queue: Track[]) {
+  if (queue[0] && getLiveTrackIdentity(queue[0]) === getLiveTrackIdentity(current)) return [...queue];
+  return [current, ...queue];
 }
