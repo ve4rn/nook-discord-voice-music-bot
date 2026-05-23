@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { prependStoredTrackOnce } from "./AudioManager.js";
+import { getJoinSessionState, prependStoredTrackOnce, shouldAppendToQueue } from "./AudioManager.js";
 import type { StoredTrack } from "../../types/audio.js";
 
 function createTrack(title: string, suffix: string): StoredTrack {
@@ -30,5 +30,47 @@ describe("prependStoredTrackOnce", () => {
     const queue = [previousCurrent, createTrack("Later", "later")];
 
     expect(prependStoredTrackOnce(previousCurrent, queue)).toEqual(queue);
+  });
+});
+
+describe("getJoinSessionState", () => {
+  it("keeps active sessions active when rejoining the voice channel", () => {
+    expect(getJoinSessionState("active")).toBe("active");
+  });
+
+  it("preserves stopped sessions for explicit resume flows", () => {
+    expect(getJoinSessionState("stopped")).toBe("stopped");
+  });
+});
+
+describe("shouldAppendToQueue", () => {
+  it("appends when a live track is already active", () => {
+    expect(shouldAppendToQueue({
+      sessionState: "active",
+      hasPersistedCurrentTrack: true,
+      isPlaying: true,
+      isPaused: false,
+      hasLiveCurrentTrack: true,
+    })).toBe(true);
+  });
+
+  it("appends when the player briefly desyncs but the active session still has a persisted current track", () => {
+    expect(shouldAppendToQueue({
+      sessionState: "active",
+      hasPersistedCurrentTrack: true,
+      isPlaying: false,
+      isPaused: false,
+      hasLiveCurrentTrack: false,
+    })).toBe(true);
+  });
+
+  it("does not append for a stopped session without a live current track", () => {
+    expect(shouldAppendToQueue({
+      sessionState: "stopped",
+      hasPersistedCurrentTrack: true,
+      isPlaying: false,
+      isPaused: false,
+      hasLiveCurrentTrack: false,
+    })).toBe(false);
   });
 });

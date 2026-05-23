@@ -3,13 +3,14 @@ export type PlaylistTrackConfig = {
     title: string;
     author: string;
     duration: number;
+    url: string;
+    source: string;
+    artworkUrl: string | null;
+    isStream: boolean;
     encoded?: string;
     query?: string;
-    url?: string;
-    source?: string;
     identifier?: string;
-    artworkUrl?: string | null;
-    isStream?: boolean;
+    isrc?: string;
 };
 
 export type AudioPlaylistConfig = {
@@ -19,27 +20,79 @@ export type AudioPlaylistConfig = {
     tracks: PlaylistTrackConfig[];
 };
 
-export const audioPlaylists: AudioPlaylistConfig[] = [
+type RawPlaylistTrackConfig = Omit<PlaylistTrackConfig, "url" | "source" | "artworkUrl" | "isStream"> & Partial<Pick<PlaylistTrackConfig, "url" | "source" | "artworkUrl" | "isStream">>;
+
+type RawAudioPlaylistConfig = Omit<AudioPlaylistConfig, "tracks"> & {
+    tracks: RawPlaylistTrackConfig[];
+};
+
+function extractEncodedMetadata(encoded: string) {
+    const decoded = Buffer.from(encoded, "base64").toString("utf8");
+    const urls = [...decoded.matchAll(/https?:\/\/[^\s\u0000]+/g)]
+        .map(match => match[0].replace(/\u0001+$/g, "").trim());
+    const url = urls.find(candidate => !candidate.includes("/stream/hls")) ?? urls[0] ?? null;
+    const artworkUrl = urls.find(candidate => /\.(?:png|jpe?g|webp)(?:[?#].*)?$/i.test(candidate)) ?? null;
+    return { url, artworkUrl };
+}
+
+function inferTrackSource(url: string) {
+    const normalized = url.toLowerCase();
+    if (normalized.includes("youtube.com") || normalized.includes("youtu.be")) return "youtube";
+    if (normalized.includes("soundcloud.com")) return "soundcloud";
+    if (normalized.includes("spotify.com")) return "spotify";
+    if (normalized.includes("deezer.com")) return "deezer";
+    return "unknown";
+}
+
+function completePlaylistTrack(track: RawPlaylistTrackConfig): PlaylistTrackConfig {
+    const embedded = track.encoded ? extractEncodedMetadata(track.encoded) : { url: null, artworkUrl: null };
+    const url = (track.url ?? embedded.url)?.trim();
+    if (!url) throw new Error(`Playlist track "${track.id}" is missing a canonical url.`);
+
+    const source = (track.source ?? inferTrackSource(url)).trim();
+    if (!source) throw new Error(`Playlist track "${track.id}" is missing a source.`);
+
+    return {
+        ...track,
+        url,
+        source,
+        artworkUrl: track.artworkUrl?.trim() ?? embedded.artworkUrl,
+        isStream: track.isStream ?? false,
+    };
+}
+
+function completePlaylist(playlist: RawAudioPlaylistConfig): AudioPlaylistConfig {
+    return {
+        ...playlist,
+        tracks: playlist.tracks.map(completePlaylistTrack),
+    };
+}
+
+const rawAudioPlaylists: RawAudioPlaylistConfig[] = [
     {
-        id: "neon-memories",
-        name: "Neon Memories",
-        description: "Vintage 80s & 90s vibes, retro pop, R&B and hip-hop classics",
+        id: "vintage",
+        name: "vintage",
+        description: "80s & 90s vibes, retro pop, R&B and hip-hop classics",
         tracks: [
             {
                 id: "1",
-                encoded: "QAAAsAMAEUJvb2dpZSBXb25kZXJsYW5kABFFYXJ0aCBXaW5kICYgRmlyZQAAAAAABHiIAAtTSUJSbUs3NFR6awABACtodHRwczovL3d3dy55b3V0dWJlLmNvbS93YXRjaD92PVNJQlJtSzc0VHprAQAwaHR0cHM6Ly9pLnl0aW1nLmNvbS92aS9TSUJSbUs3NFR6ay9tcWRlZmF1bHQuanBnAAAHeW91dHViZQAAAAAAAAAA",
-                title: "Boogie Wonderland",
+                encoded: "QAABKgMAPUJvb2dpZSBXb25kZXJsYW5kIChTaW5nbGUgVmVyc2lvbikgKGZlYXQuIEVhcnRoLCBXaW5kICYgRmlyZSkAEkVhcnRoLCBXaW5kICYgRmlyZQAAAAAABGjoAAtQYnBJeW43MHQ4YwABACtodHRwczovL3d3dy55b3V0dWJlLmNvbS93YXRjaD92PVBicEl5bjcwdDhjAQB9aHR0cHM6Ly95dDMuZ29vZ2xldXNlcmNvbnRlbnQuY29tL2JfR0xLeXdadmJLS044TW1idHJUakg1alZ5anNrWEk5VnVVSEhTRWJUdkt0YnUxMGIwNW1UWnd5UlJxS2laN0NMMEtZV2ZLMHdnenY2MkU9dzEwMDAtaDEwMDAAAAd5b3V0dWJlAAAAAAAAAAA=",
+                title: "Boogie Wonderland (with The Emotions)",
                 author: "Earth Wind & Fire",
-                duration: 293000,
-                source: "soundcloud",
+                duration: 289000,
+                source: "spotify",
+                artworkUrl: "https://i.scdn.co/image/ab67616d0000b2738b2238ebc2b233ba73b8c4ca",
+                url: "https://open.spotify.com/track/6ztstiyZL6FXzh4aG46ZPD"
             },
             {
                 id: "2",
-                encoded: "QAAAqwMADExldCdzIEdyb292ZQARRWFydGggV2luZCAmIEZpcmUAAAAAAAUJEAALVUxueXZuRmd2SG8AAQAraHR0cHM6Ly93d3cueW91dHViZS5jb20vd2F0Y2g/dj1VTG55dm5GZ3ZIbwEAMGh0dHBzOi8vaS55dGltZy5jb20vdmkvVUxueXZuRmd2SG8vbXFkZWZhdWx0LmpwZwAAB3lvdXR1YmUAAAAAAAAAAA==",
+                encoded: "QAAA+gMADExldCdzIEdyb292ZQASRWFydGgsIFdpbmQgJiBGaXJlAAAAAAAFMCAAC2x0amlvNEFNMnV3AAEAK2h0dHBzOi8vd3d3LnlvdXR1YmUuY29tL3dhdGNoP3Y9bHRqaW80QU0ydXcBAH5odHRwczovL3l0My5nb29nbGV1c2VyY29udGVudC5jb20vb2hYbVhMOG1OQkl0bVlrMlNSdHg1ZHVaMUt5UVJFTUhqR2RvV3ZHNEZBNkg0R1pneDV0R0FIUUpROHN0MTJON0M3VUF2YU0zOXVHNGhqTE49dzEwMDAtaDEwMDAAAAd5b3V0dWJlAAAAAAAAAAA=",
                 title: "Let's Groove",
                 author: "Earth Wind & Fire",
-                duration: 330000,
-                source: "youtube",
+                duration: 340000,
+                source: "spotify",
+                artworkUrl: "https://i.scdn.co/image/ab67616d0000b273e691caf11b86a3729899a304",
+                url: "https://open.spotify.com/track/3koCCeSaVUyrRo3N2gHrd8"
             },
             {
                 id: "3",
@@ -47,15 +100,19 @@ export const audioPlaylists: AudioPlaylistConfig[] = [
                 title: "Jump",
                 author: "Van Halen",
                 duration: 240000,
-                source: "youtube",
+                source: "spotify",
+                artworkUrl: "https://i.scdn.co/image/ab67616d0000b27343de9079ae02773c1fae9a26",
+                url: "https://open.spotify.com/track/6Fba9RZtC6vTY814JToDtP"
             },
             {
                 id: "4",
-                encoded: "QAABXgMAK0EgTWFuIFdpdGhvdXQgTG92ZSAtIEVuZ2VsYmVydCBIdW1wZXJkaW5jay4ACEh1QWxMYVlvAAAAAAADCXMAclU6aHR0cHM6Ly9hcGktdjIuc291bmRjbG91ZC5jb20vbWVkaWEvc291bmRjbG91ZDp0cmFja3M6MTk2ODU3MjMzMS9iMzE2ZmU1My04MzkzLTRmODUtYWExYS02ZTkzOTM4OTBhOWQvc3RyZWFtL2hscwABAEtodHRwczovL3NvdW5kY2xvdWQuY29tL2h1YWxsYXlvLXN3L2EtbWFuLXdpdGhvdXQtbG92ZS1lbmdlbGJlcnQtaHVtcGVyZGluY2sBAENodHRwczovL2kxLnNuZGNkbi5jb20vYXJ0d29ya3MtaWRZU2MwNmp2VjUwWFkzMS0yZHo2RXctb3JpZ2luYWwuanBnAAAKc291bmRjbG91ZAAAAAAAAAAA",
+                encoded: "QAABAwMAEkEgTWFuIFdpdGhvdXQgTG92ZQAVRW5nZWxiZXJ0IEh1bXBlcmRpbmNrAAAAAAADHOAAC28wV1dhQTNvRmE0AAEAK2h0dHBzOi8vd3d3LnlvdXR1YmUuY29tL3dhdGNoP3Y9bzBXV2FBM29GYTQBAH5odHRwczovL3l0My5nb29nbGV1c2VyY29udGVudC5jb20vUHp1dF9Nd2w5ZWFLeW1ENV92RkE0ZDR1cTJhLXQyanNwQlZtMGx3NDloSWhyNHd5Zy1wVkhQVnE0NGwyY3BrazAzLUZWTVdxMkRxcVlfR3c9dzEwMDAtaDEwMDAAAAd5b3V0dWJlAAAAAAAAAAA=",
                 title: "A Man Without Love",
                 author: "Engelbert Humperdinck",
-                duration: 199027,
-                source: "soundcloud",
+                duration: 204000,
+                source: "spotify",
+                artworkUrl: "https://i.scdn.co/image/ab67616d0000b27313f61b73b155d49c9ad671b9",
+                url: "https://open.spotify.com/track/0oUBuOO4g9P4lREqfqR5nq"
             },
             {
                 id: "5",
@@ -101,8 +158,8 @@ export const audioPlaylists: AudioPlaylistConfig[] = [
         ],
     },
     {
-        id: "808s-hip-hop",
-        name: "Silence & 808s",
+        id: "pop",
+        name: "Pop",
         description: "Dark atmospheric hip-hop with heavy 808s",
         tracks: [
             {
@@ -185,22 +242,6 @@ export const audioPlaylists: AudioPlaylistConfig[] = [
                 duration: 203207,
                 source: "soundcloud"
             },
-            {
-                id: "11",
-                encoded: "QAAAqAMAEERhbXNvIC0gQXV0b3R1bmUACkRhbXNvIERFTVMAAAAAAAR8cAALVGZ5S0xrOXhqaFkAAQAraHR0cHM6Ly93d3cueW91dHViZS5jb20vd2F0Y2g/dj1UZnlLTGs5eGpoWQEAMGh0dHBzOi8vaS55dGltZy5jb20vdmkvVGZ5S0xrOXhqaFkvbXFkZWZhdWx0LmpwZwAAB3lvdXR1YmUAAAAAAAAAAA==",
-                title: "Autotune",
-                author: "Damso",
-                duration: 294000,
-                source: "youtube",
-            },
-            {
-                id: "12",
-                encoded: "QAAAoQMACUluIEZvciBJdAAKVG9yeSBMYW5legAAAAAABHxwAAtBbXA4NnY0TmQ4UQABACtodHRwczovL3d3dy55b3V0dWJlLmNvbS93YXRjaD92PUFtcDg2djROZDhRAQAwaHR0cHM6Ly9pLnl0aW1nLmNvbS92aS9BbXA4NnY0TmQ4US9tcWRlZmF1bHQuanBnAAAHeW91dHViZQAAAAAAAAAA",
-                title: "In For It",
-                author: "Tory Lanez",
-                duration: 294000,
-                source: "youtube",
-            }
         ]
     },
     {
@@ -284,6 +325,8 @@ export const audioPlaylists: AudioPlaylistConfig[] = [
         ]
     }
 ];
+
+export const audioPlaylists: AudioPlaylistConfig[] = rawAudioPlaylists.map(completePlaylist);
 
 export function getAudioPlaylist(id: string) {
     return audioPlaylists.find(playlist => playlist.id === id) ?? null;

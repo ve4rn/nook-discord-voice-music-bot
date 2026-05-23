@@ -8,6 +8,7 @@ import { env } from "../../config/env.js";
 import { LavalinkNotReadyError, QueueLimitReachedError, TrackNotFoundError } from "../../domain/errors/index.js";
 import { AudioStateRepository } from "../../repositories/AudioStateRepository.js";
 import {
+  type AudioSessionState,
   PLAYLIST_LAUNCH_LIMIT,
   getAudioQueueAvailableSlots,
   type PlaybackContext,
@@ -27,6 +28,12 @@ import type { PlaylistTrackConfig } from "./playlists.js";
 import { getDefaultEmojiMention } from "../../config/DiscordEmojis.js";
 type PlaylistAddRequest = PlaybackContext & {
   tracks: PlaylistTrackConfig[];
+  encodedOnly?: boolean;
+};
+
+type ResolvedPlaylistTrack = {
+  live: Track;
+  stored: StoredTrack;
 };
 
 type SessionEndReason = "requested" | "afk_timeout" | "manual_disconnect";
@@ -160,7 +167,7 @@ export class AudioManager {
     player.textChannelId = textChannelId;
     await player.setRepeatMode("queue").catch(() => null);
     if (!player.connected) await player.connect();
-    await this.repository.setChannels(guildId, voiceChannelId, textChannelId, state.currentTrackId || state.queue.length ? "stopped" : "active");
+    await this.repository.setChannels(guildId, voiceChannelId, textChannelId, getJoinSessionState(state.sessionState as AudioSessionState));
     return player;
   }
 
@@ -245,7 +252,13 @@ export class AudioManager {
     this.clearStopTimers(request.guildId);
     this.ensureSessionCache(request.guildId, request.textChannelId);
 
-    const shouldQueue = persisted.sessionState === "active" && (player.playing || player.paused || !!player.queue.current);
+    const shouldQueue = shouldAppendToQueue({
+      sessionState: persisted.sessionState as AudioSessionState,
+      hasPersistedCurrentTrack: Boolean(persisted.currentTrackId),
+      isPlaying: player.playing,
+      isPaused: player.paused,
+      hasLiveCurrentTrack: Boolean(player.queue.current),
+    });
 
     if (shouldQueue) {
       await this.repository.enqueue(request.guildId, choice.track);
@@ -278,18 +291,24 @@ export class AudioManager {
 
     const requestedTracks = request.tracks.slice(0, Math.min(availableSlots, PLAYLIST_LAUNCH_LIMIT));
     const player = await this.join(request.guildId, request.voiceChannelId, request.textChannelId);
-    const resolvedTracks = await this.resolvePlaylistTracks(player, requestedTracks, request.requestedBy);
+    const resolvedTracks = await this.resolvePlaylistTracks(player, requestedTracks, request.requestedBy, request.encodedOnly === true);
     if (resolvedTracks.length === 0) throw new TrackNotFoundError();
 
     this.clearStopTimers(request.guildId);
     this.ensureSessionCache(request.guildId, request.textChannelId);
     const persisted = await this.repository.getOrCreate(request.guildId);
-    const shouldQueue = persisted.sessionState === "active" && (player.playing || player.paused || !!player.queue.current);
+    const shouldQueue = shouldAppendToQueue({
+      sessionState: persisted.sessionState as AudioSessionState,
+      hasPersistedCurrentTrack: Boolean(persisted.currentTrackId),
+      isPlaying: player.playing,
+      isPaused: player.paused,
+      hasLiveCurrentTrack: Boolean(player.queue.current),
+    });
 
     if (!shouldQueue) {
       const firstTrack = resolvedTracks[0];
-      player.queue.add(firstTrack);
-      await this.repository.setCurrent(request.guildId, trackToStored(firstTrack, request.requestedBy));
+      player.queue.add(firstTrack.live);
+      await this.repository.setCurrent(request.guildId, firstTrack.stored);
       try {
         await this.playbackService.playWithRetry(player, request.guildId, "playlist", () => Boolean(this.lavalink.getPlayer(request.guildId)?.playing));
       } catch (error) {
@@ -300,14 +319,14 @@ export class AudioManager {
 
     const tracksToQueue = shouldQueue ? resolvedTracks : resolvedTracks.slice(1);
     for (const track of tracksToQueue) {
-      await this.repository.enqueue(request.guildId, trackToStored(track, request.requestedBy));
-      player.queue.add(track);
+      await this.repository.enqueue(request.guildId, track.stored);
+      player.queue.add(track.live);
     }
 
     this.energySaving.refresh(request.guildId, player.voiceChannelId, player.textChannelId ?? request.textChannelId);
 
     return {
-      added: resolvedTracks.map(track => trackToStored(track, request.requestedBy)),
+      added: resolvedTracks.map(track => track.stored),
       requested: request.tracks.length,
     };
   }
@@ -625,26 +644,35 @@ export class AudioManager {
     await this.repository.markStoppedKeepQueue(guildId).catch(() => null);
   }
 
-  private async resolvePlaylistTracks(player: Player, tracks: PlaylistTrackConfig[], requestedBy: string) {
-    const resolved: Track[] = [];
+  private async resolvePlaylistTracks(player: Player, tracks: PlaylistTrackConfig[], requestedBy: string, encodedOnly: boolean) {
+    const resolved: ResolvedPlaylistTrack[] = [];
     for (const track of tracks) {
-      const lavalinkTrack = await this.resolvePlaylistTrack(player, track, requestedBy);
+      const lavalinkTrack = await this.resolvePlaylistTrack(player, track, requestedBy, encodedOnly);
       if (lavalinkTrack) resolved.push(lavalinkTrack);
     }
     return resolved;
   }
 
-  private async resolvePlaylistTrack(player: Player, track: PlaylistTrackConfig, requestedBy: string) {
+  private async resolvePlaylistTrack(player: Player, track: PlaylistTrackConfig, requestedBy: string, encodedOnly: boolean): Promise<ResolvedPlaylistTrack | null> {
     if (track.encoded) {
       const decoded = await player.node.decode.singleTrack(track.encoded, { id: requestedBy }).catch(() => null);
-      if (decoded) return decoded;
+      if (decoded) {
+        const stored = playlistTrackToStored(track, requestedBy, decoded.encoded);
+        this.search.applyStoredMetadata(decoded, stored);
+        return { live: decoded, stored };
+      }
     }
 
-    const query = track.url ?? track.query ?? track.identifier;
-    if (!query) return null;
+    if (encodedOnly) return null;
 
-    const choice = await this.search.resolve(query, requestedBy);
-    return choice?.lavalinkTrack ?? null;
+    const resolved = await this.search.resolveImportedPlaylistTrack(track, requestedBy);
+    if (resolved) {
+      const stored = playlistTrackToStored(track, requestedBy, resolved.encoded);
+      this.search.applyStoredMetadata(resolved, stored);
+      return { live: resolved, stored };
+    }
+
+    return null;
   }
 
   private async resolveStoredTrack(player: Player, track: StoredTrack) {
@@ -1068,6 +1096,21 @@ function getLiveTrackIdentity(track: Track) {
   return track.encoded || track.info.identifier || track.info.uri || `${track.info.author ?? ""}:${track.info.title}`;
 }
 
+export function getJoinSessionState(sessionState: AudioSessionState): AudioSessionState {
+  return sessionState === "stopped" ? "stopped" : "active";
+}
+
+export function shouldAppendToQueue(input: {
+  sessionState: AudioSessionState;
+  hasPersistedCurrentTrack: boolean;
+  isPlaying: boolean;
+  isPaused: boolean;
+  hasLiveCurrentTrack: boolean;
+}) {
+  if (input.isPlaying || input.isPaused || input.hasLiveCurrentTrack) return true;
+  return input.sessionState === "active" && input.hasPersistedCurrentTrack;
+}
+
 export function prependStoredTrackOnce(current: StoredTrack, queue: StoredTrack[]) {
   if (queue[0] && sameStoredTrack(queue[0], current)) return [...queue];
   return [current, ...queue];
@@ -1076,4 +1119,21 @@ export function prependStoredTrackOnce(current: StoredTrack, queue: StoredTrack[
 export function prependLiveTrackOnce(current: Track, queue: Track[]) {
   if (queue[0] && getLiveTrackIdentity(queue[0]) === getLiveTrackIdentity(current)) return [...queue];
   return [current, ...queue];
+}
+
+function playlistTrackToStored(track: PlaylistTrackConfig, requestedBy: string, encoded = track.encoded): StoredTrack {
+  return {
+    title: track.title,
+    url: track.url,
+    duration: track.duration,
+    requestedBy,
+    source: track.source,
+    metadataSource: track.source,
+    author: track.author,
+    encoded,
+    identifier: track.identifier,
+    isrc: track.isrc,
+    artworkUrl: track.artworkUrl,
+    isStream: track.isStream,
+  };
 }
